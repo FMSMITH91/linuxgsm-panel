@@ -39,7 +39,9 @@ _HHMM = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 REF_RE = re.compile(r"(?:website:[1-9][0-9]{0,9}|addon:[1-9][0-9]{0,9}:[a-z][a-z0-9-]{0,31})\Z")
 _OFF_MAX = 5000
 # What each kind of update costs, in the words the rows show.
-COST_SITE = "A few seconds offline (building a PHP image can take a few minutes first). Its files, databases and settings stay."
+COST_SITE = "A few seconds offline. Its files, databases and settings stay."
+COST_SITE_BUILD = ("A few seconds offline (building its new image can take a few minutes first). Its files, databases and "
+                   "settings stay.")
 COST_ADDON = "The add-on restarts: about a minute without it. Players stay on the game server."
 COST_LGSM = "No restart: players stay on. Only LinuxGSM's own scripts change."
 COST_OS = "Services on the host may restart, and a kernel update needs a reboot to take effect."

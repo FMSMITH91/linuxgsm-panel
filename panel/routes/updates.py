@@ -19,6 +19,7 @@ manage it (remote_vps.os_update_hosts); a game server's LinuxGSM who may run upd
 who holds Manage add-ons on it; a website whoever may see it (a customer their own sites), its Update now only
 who administers it.
 """
+import re
 import threading
 from datetime import timezone
 
@@ -252,7 +253,7 @@ def _site_rows(user, cfg, sec):
         sched = site_schedule(site, cfg, sec)
         rows.append(_row("website", "website:%d" % site.id, site.name, what=what
                          + ([sec["note"]] if sched["security"] and sec["note"] else []),
-                         cost=U.tr(U.COST_SITE), safe=True, security=sched["security"], auto=sched["auto"],
+                         cost=sched["cost"], safe=True, security=sched["security"], auto=sched["auto"],
                          auto_editable=site.id in admin, when=sched["when"],
                          action={"post": url_for("website_update_image", site_id=site.id)} if site.id in admin else None,
                          link=url_for("website_page", site_id=site.id)))
@@ -273,16 +274,45 @@ def collect(user):
     return {"groups": [g for g in groups if g["items"]], "count": len(rows)}
 
 
+def _row_zones(rows):
+    """{audit row id: the IANA zone of the host it is about, or None for the panel's own host}.
+
+    The host is the row's own (remote_id), its game server's or its website's; read in three queries for the page.
+    """
+    from panel.db.models import RemoteServer, Website
+    gs_ids = {r.game_server_id for r in rows if r.game_server_id and not r.remote_id}
+    site_ids = {r.website_id for r in rows if r.website_id and not r.remote_id}
+    via = {("g", g.id): g.remote_id for g in GameServer.query.filter(GameServer.id.in_(sorted(gs_ids) or [0])).all()}
+    via.update({("w", w.id): w.remote_id for w in Website.query.filter(Website.id.in_(sorted(site_ids) or [0])).all()})
+    rid = {r.id: r.remote_id or via.get(("g", r.game_server_id)) or via.get(("w", r.website_id)) for r in rows}
+    remotes = {x.id: x for x in RemoteServer.query.filter(RemoteServer.id.in_(sorted(
+        {v for v in rid.values() if v}) or [0])).all()}
+    return {k: U.host_zone(remotes[v]) if v in remotes else None for k, v in rid.items()}
+
+
+def host_time(stamp, zone):
+    """A naive UTC audit time as "YYYY-MM-DD HH:MM" on the clock of the host in `zone` (None: the panel's host)."""
+    from zoneinfo import ZoneInfo
+    aware = stamp.replace(tzinfo=timezone.utc)
+    return (aware.astimezone(ZoneInfo(zone)) if zone else aware.astimezone()).strftime("%Y-%m-%d %H:%M")
+
+
 def history(user):
-    """The last HISTORY_MAX update rows of the audit log that `user` may read (audit.audit_scope)."""
+    """The last HISTORY_MAX update rows of the audit log that `user` may read (audit.audit_scope).
+
+    Each row's time is on the clock of the host it is about (`at_host`), as the nightly window's times are.
+    """
     from panel.routes.audit import audit_scope
     q = AuditLog.query.filter(AuditLog.action.in_(HISTORY_ACTIONS))
     scope = audit_scope(user)
     if scope is not None:
         q = q.filter(scope)
-    return [{"at": r.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ") if r.timestamp else "", "who": r.username or "",
+    rows = q.order_by(AuditLog.id.desc()).limit(HISTORY_MAX).all()
+    zones = _row_zones(rows)
+    return [{"at": r.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ") if r.timestamp else "",
+             "at_host": host_time(r.timestamp, zones.get(r.id)) if r.timestamp else "", "who": r.username or "",
              "action": r.action, "target": r.target or "", "ok": bool(r.success), "detail": (r.detail or "")[:300]}
-            for r in q.order_by(AuditLog.id.desc()).limit(HISTORY_MAX).all()]
+            for r in rows]
 
 
 def _settings_json(user, cfg):

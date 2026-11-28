@@ -155,6 +155,8 @@
     WS.show('ws-update-box', !!img.update_available);
     setText('ws-update-ready', img.ready || '');
     setText('ws-update-when', img.when || '');
+    var cost = WS.el('ws-update-cost');
+    if (cost) cost.textContent = img.cost || '';
     setText('ws-update-off', img.note || '');
     WS.show('ws-update-off', !!img.note);
     WS.show('ws-update-when', !img.note);     // the note already says it waits for Update now

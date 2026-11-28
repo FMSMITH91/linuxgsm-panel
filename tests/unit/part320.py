@@ -141,7 +141,7 @@ def _s1_page(host, su):
     eq("updates (GET /updates, /api/updates as a superadmin): the page opens, a website with a new image and new "
        "site files is listed with both changes, its cost, the nightly window's time and its own Update route; a "
        "website already current is not listed",
-       (page.status_code, b'id="upd-page"' in page.data, len(r.get("what") or []), r.get("cost") == _u320.COST_SITE,
+       (page.status_code, b'id="upd-page"' in page.data, len(r.get("what") or []), r.get("cost") == _u320.COST_SITE_BUILD,
         r.get("when"), (r.get("action") or {}).get("post"), r.get("safe"), r.get("auto"),
         "website:%d" % fresh.id in mine),
        (200, True, 2, True, "By itself tonight at 04:00 (the host's clock).", "/websites/%d/update-image" % pend.id,

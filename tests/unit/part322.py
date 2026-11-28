@@ -599,6 +599,50 @@ def _pending322(st, name, kind, image_same, files):
     return s
 
 
+def _s9_sites(st):
+    from panel.services import updates as _u, updates_auto as _ua, websites as _svc
+    from panel.ops.ssh_manager import websites as _sw
+    rev = int(_svc.SITE_FILES_REV.split("-")[1])
+    wp = _pending322(st, "p322wp", "wordpress", True, "files-%d" % (rev - 1))
+    php = _pending322(st, "p322php", "php", False, _svc.SITE_FILES_REV)
+    busy = _pending322(st, "p322busy", "php", False, _svc.SITE_FILES_REV)
+    now = _time322.gmtime()
+    start = "%02d:%02d" % divmod((now.tm_hour * 60 + now.tm_min - 1) % 1440, 60)
+    end = "%02d:%02d" % divmod((now.tm_hour * 60 + now.tm_min + 30) % 1440, 60)
+    _cfg322.update_config(lambda cfg: cfg.update({_u.CFG: {"start": start, "end": end, "off": []}}))
+    st.host.timezone = "UTC"
+    _db322.session.commit()
+    _p9_patch(_ua, "_site_ids", lambda: [busy.id])
+    _p9_patch(_ua, "_server_ids", lambda: [])
+    _p9_patch(_sw, "recent_requests", lambda remote, site: 2)
+    _ua.tick(_p9)
+    su = _Client322(st.su.id)
+    rows, body = _updates322(su)
+    r_wp, r_php, r_busy = (rows.get("website:%d" % s.id) or {} for s in (wp, php, busy))
+    eq("Updates (GET /api/updates, websites): a WordPress site whose only change is the site files' new revision says "
+       "what it is (Site Health reads the page cache) and costs a few seconds, no build; a PHP site with a new image "
+       "says its image is built first",
+       (any("Site Health" in w for w in r_wp.get("what") or []), r_wp.get("cost"), r_php.get("cost")),
+       (True, _u.tr(_u.COST_SITE), _u.tr(_u.COST_SITE_BUILD)))
+    eq("Updates (the nightly window tried a busy site tonight): its row says it waits for the next night, not "
+       "\"tonight\" again; a site not tried yet still says tonight (control)",
+       ("next night at %s" % start in r_busy.get("when", ""), "By itself tonight at %s" % start in r_php.get("when", "")),
+       (True, True))
+    st.host.timezone = "America/New_York"
+    _db322.session.commit()
+    hist = [h for h in _updates322(su)[1].get("history") or [] if h.get("target") == busy.name]
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    want = (datetime.strptime(hist[0]["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            .astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")) if hist else None
+    eq("Updates (History): each row's time is on the clock of the host it ran on, as the window's times are",
+       (len(hist), hist[0].get("at_host") if hist else None), (1, want))
+    _cfg322.update_config(lambda cfg: cfg.pop(_u.CFG, None))
+    _ua._DONE.clear()
+    _u.forget_counts()
+    return body
+
+
 _UPD_SCN322 = r"""
   for (let i = 0; i < 6; i++) await tick();
   const btn = $('upd-safe'), why = $('upd-safe-why');
@@ -698,7 +742,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note, _s9_lgsm):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note, _s9_lgsm, _s9_sites):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

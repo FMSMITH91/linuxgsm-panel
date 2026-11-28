@@ -16,7 +16,9 @@ confirmation where that asks for one); for the panel and a host's packages it op
 confirm. The pages that had their own Update buttons keep them, with a link here.
 
 **Update everything safe now** updates, one at a time, every listed item that kicks no player and needs no reboot:
-websites, add-ons on servers with no players on, and LinuxGSM. It asks for your password first.
+websites, add-ons on servers with no players on, and LinuxGSM. It asks for your password first. When nothing listed
+is yours to run (a customer's sites, say), the button stays greyed with the reason beside it. **Update now** leaves
+its row in place with the result.
 
 The list is read from what the panel already knows (the daily OS check, the panel's update check, what the server
 and add-on pages last read), so opening the page asks no host anything. Who sees what follows the existing
@@ -33,7 +35,8 @@ every item by default.
 - **One at a time.** The panel updates one item, waits for it to finish, then takes the next.
 - **Busy items wait.** A website that answered visitors in the last few minutes (the web proxy still holds a
   connection to it) waits for the next night, and so does a site whose host did not answer the check. An add-on whose
-  game server has players on waits too. The history says so.
+  game server has players on waits too. The history says so, and the row then says it updates by itself the next
+  night.
 - **A failed update is undone.** A website is installed again from the image it ran before (still on the host), and
   an add-on gets back the settings record and unit it had and is started again. You get the **Automatic update
   failed** alert (Notifications), and the history says what happened. The next window tries again.

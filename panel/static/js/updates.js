@@ -55,6 +55,7 @@
     });
     var b = document.getElementById('upd-safe');
     if (b) { b.disabled = !safe; b.title = safe ? TF('{n} update(s) can run now without kicking players.', {n: safe}) : ''; }
+    safeWhy(d.groups, safe);
     renderOff(off);
     renderSettings(d.settings || {});
     renderHistory(d.history || [], false);
@@ -171,6 +172,13 @@
       if (d.success) setTimeout(load, d.started ? 15000 : 1500);
       else b.disabled = false;
     }).catch(function () { out.className = 'small mt-1 text-danger'; out.textContent = T('The update failed.'); b.disabled = false; });
+  }
+  function refreshAround() {
+    fetch(MOUNT + '/api/updates', {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.success) return;
+      last = d;
+      renderHistory(d.history || [], false);
+    }).catch(function () {});
   }
 
   function autoSwitch(r, out) {

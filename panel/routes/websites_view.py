@@ -334,7 +334,8 @@ def _image(site, probe):
         what = _ru.site_changes(site)
         sched = _ru.site_schedule(site)
         out.update(ready=i18n.tr(i18n.Sentence("{n} update(s) ready: {what}", n=len(what), what=" ".join(what))),
-                   when=sched["when"], note=sched["note"], security=sched["security"], auto=sched["auto"])
+                   when=sched["when"], note=sched["note"], security=sched["security"], auto=sched["auto"],
+                   cost=sched["cost"])
     return out
 
 
