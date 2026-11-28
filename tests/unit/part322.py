@@ -601,7 +601,6 @@ def _pending322(st, name, kind, image_same, files):
 
 def _s9_sites(st):
     from panel.services import updates as _u, updates_auto as _ua, websites as _svc
-    from panel.ops.ssh_manager import websites as _sw
     rev = int(_svc.SITE_FILES_REV.split("-")[1])
     wp = _pending322(st, "p322wp", "wordpress", True, "files-%d" % (rev - 1))
     php = _pending322(st, "p322php", "php", False, _svc.SITE_FILES_REV)
@@ -614,7 +613,7 @@ def _s9_sites(st):
     _db322.session.commit()
     _p9_patch(_ua, "_site_ids", lambda: [busy.id])
     _p9_patch(_ua, "_server_ids", lambda: [])
-    _p9_patch(_sw, "recent_requests", lambda remote, site: 2)
+    _p9_patch(_sw322, "recent_requests", lambda remote, site: 2)
     _ua.tick(_p9)
     su = _Client322(st.su.id)
     rows, body = _updates322(su)

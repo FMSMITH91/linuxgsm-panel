@@ -3242,14 +3242,7 @@ def do_website_proxy_apply(args, content):
         dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
         _web_write(dest, pem.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
     old = _web_read(WEB_PROXY_CONF)
-    if guard is not None and guard["enabled"]:
-        # `caddy validate` (as the proxy's user) opens every log writer the candidate names, the security log among
-        # them, and the proxy's user cannot make a folder in /var/log: the folder is made first, or the first apply
-        # with blocking on is refused (the unit's LogsDirectory= is written only by the start that follows).
-        try:
-            _web_log_dir(pw)
-        except OSError:
-            pass    # validate then says why in its own words (valid=no), and nothing is swapped
+    _web_log_dir_first(guard, pw)
     if not _web_validated(text, pw):
         return 1
     sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
@@ -3259,6 +3252,21 @@ def do_website_proxy_apply(args, content):
         if guard is not None:
             _web_guard_apply(guard, pw)       # its outcome is printed (guard=); the proxy runs either way
     return rc
+
+
+def _web_log_dir_first(guard, pw):
+    """The security log's folder made before `caddy validate` when blocking is on (`guard`, web_guard_doc's).
+
+    Validate (as the proxy's user) opens every log writer the candidate names, the security log among them, and the
+    proxy's user cannot make a folder in /var/log: without it first, the first apply with blocking on is refused (the
+    unit's LogsDirectory= is written only by the start that follows).
+    """
+    if guard is None or not guard["enabled"]:
+        return
+    try:
+        _web_log_dir(pw)
+    except OSError:
+        pass    # validate then says why in its own words (valid=no), and nothing is swapped
 
 
 def _web_prune_certs(keep):

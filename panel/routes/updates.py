@@ -274,19 +274,26 @@ def collect(user):
     return {"groups": [g for g in groups if g["items"]], "count": len(rows)}
 
 
+def _remote_ids(model, ids):
+    """{row id: its remote_id} of `model`'s rows `ids` (one query)."""
+    return {x.id: x.remote_id for x in model.query.filter(model.id.in_(sorted(ids) or [0])).all()}
+
+
+def _row_host(r, servers, sites):
+    """The remote id an audit row is about: its own, its game server's or its website's (None: the panel's host)."""
+    return r.remote_id or servers.get(r.game_server_id) or sites.get(r.website_id)
+
+
 def _row_zones(rows):
     """{audit row id: the IANA zone of the host it is about, or None for the panel's own host}.
 
     The host is the row's own (remote_id), its game server's or its website's; read in three queries for the page.
     """
     from panel.db.models import RemoteServer, Website
-    gs_ids = {r.game_server_id for r in rows if r.game_server_id and not r.remote_id}
-    site_ids = {r.website_id for r in rows if r.website_id and not r.remote_id}
-    via = {("g", g.id): g.remote_id for g in GameServer.query.filter(GameServer.id.in_(sorted(gs_ids) or [0])).all()}
-    via.update({("w", w.id): w.remote_id for w in Website.query.filter(Website.id.in_(sorted(site_ids) or [0])).all()})
-    rid = {r.id: r.remote_id or via.get(("g", r.game_server_id)) or via.get(("w", r.website_id)) for r in rows}
-    remotes = {x.id: x for x in RemoteServer.query.filter(RemoteServer.id.in_(sorted(
-        {v for v in rid.values() if v}) or [0])).all()}
+    servers = _remote_ids(GameServer, {r.game_server_id for r in rows if r.game_server_id})
+    sites = _remote_ids(Website, {r.website_id for r in rows if r.website_id})
+    rid = {r.id: _row_host(r, servers, sites) for r in rows}
+    remotes = {x.id: x for x in RemoteServer.query.filter(RemoteServer.id.in_(sorted(set(rid.values()) - {None}) or [0]))}
     return {k: U.host_zone(remotes[v]) if v in remotes else None for k, v in rid.items()}
 
 
