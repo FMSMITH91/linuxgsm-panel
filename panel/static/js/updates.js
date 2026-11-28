@@ -148,13 +148,14 @@
     if (r.security) top.appendChild(el('span', 'badge text-bg-danger', T('Security update')));
     return top;
   }
-  function row(r) {
-    var wrap = el('div', 'upd-row py-2');
-    wrap.appendChild(rowHead(r));
+  // What the row says before its cost: the two version lines, what the update changes, and its notes' links.
+  function rowBody(r, wrap) {
     if ((r.versions || []).length) wrap.appendChild(versions(r.versions));
     if ((r.what || []).length) wrap.appendChild(lines(r.what));
     if ((r.notes || []).length) wrap.appendChild(notes(r.notes));
-    wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));
+  }
+  // When it updates by itself, with the link that changes it where there is one.
+  function whenLine(r) {
     var when = line('clock', r.when, r.auto === false && !r.security ? 'text-warning-emphasis' : '');
     if (r.when_link && r.when_link.href) {
       var wl = el('a', 'ms-1', r.when_link.title || '');
@@ -162,6 +163,14 @@
       wl.setAttribute('data-no-i18n', '');
       when.appendChild(wl);
     }
+    return when;
+  }
+  function row(r) {
+    var wrap = el('div', 'upd-row py-2');
+    wrap.appendChild(rowHead(r));
+    rowBody(r, wrap);
+    wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));
+    var when = whenLine(r);
     wrap.appendChild(when);
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');
