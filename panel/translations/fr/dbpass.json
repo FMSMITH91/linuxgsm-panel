@@ -17,9 +17,17 @@
   "That account is not an administrator of this WordPress site.": "Ce compte n'est pas administrateur de ce site WordPress.",
   "The administrator has a new password and was signed out everywhere.": "L'administrateur a un nouveau mot de passe et a été déconnecté partout.",
   "The administrator is signed out of WordPress everywhere. The panel never stores the password; this is written to the audit log.": "L'administrateur est déconnecté de WordPress partout. Le panneau ne conserve jamais le mot de passe ; cela est inscrit au journal d'audit.",
+  "The app's settings file does not hold this database's current password, so the password was not changed: the site keeps working.": "Le fichier de réglages de l'application ne contient pas le mot de passe actuel de cette base de données, le mot de passe n'a donc pas été changé : le site continue de fonctionner.",
+  "The app's variables ({names}) get the new password, and the app is restarted.": "Les variables de l'application ({names}) reçoivent le nouveau mot de passe et l'application est redémarrée.",
+  "The database has a new password and the app's variables ({names}) have it; the app was restarted.": "La base de données a un nouveau mot de passe et les variables de l'application ({names}) l'ont ; l'application a été redémarrée.",
+  "The database has a new password and {app}'s settings have it: the site keeps working.": "La base de données a un nouveau mot de passe et les réglages de {app} l'ont : le site continue de fonctionner.",
+  "The database has a new password. The site's code must be given it: it cannot reach the database until then.": "La base de données a un nouveau mot de passe. Il faut le donner au code du site : il ne peut pas joindre la base de données d'ici là.",
+  "The new password did not work ({why}) and the old one could not be put back everywhere ({left}). Reset the password again.": "Le nouveau mot de passe n'a pas fonctionné ({why}) et l'ancien n'a pas pu être remis partout ({left}). Réinitialisez à nouveau le mot de passe.",
+  "The new password did not work ({why}), so the old one was put back: the site keeps working.": "Le nouveau mot de passe n'a pas fonctionné ({why}), l'ancien a donc été remis : le site continue de fonctionner.",
   "The panel can reset the administrator password of a WordPress site only.": "Le panneau ne peut réinitialiser le mot de passe administrateur que d'un site WordPress.",
   "The panel resets the administrator password of WordPress sites. For this app, use its own \"Forgot password\" link on its sign-in page: it emails the administrator, so the site needs outgoing mail.": "Le panneau réinitialise le mot de passe administrateur des sites WordPress. Pour cette application, utilisez son propre lien « Mot de passe oublié » sur sa page de connexion : il envoie un e-mail à l'administrateur, le site doit donc pouvoir envoyer du courrier.",
   "The website is being set up. Wait until it is running or stopped, then try again.": "Le site web est en cours de configuration. Attendez qu'il soit démarré ou arrêté, puis réessayez.",
   "WordPress did not answer: is it installed on this site? Its database must be reachable too.": "WordPress n'a pas répondu : est-il installé sur ce site ? Sa base de données doit aussi être joignable.",
-  "WordPress refused that email address.": "WordPress a refusé cette adresse e-mail."
+  "WordPress refused that email address.": "WordPress a refusé cette adresse e-mail.",
+  "{app}'s settings get the new password; the site keeps working.": "Les réglages de {app} reçoivent le nouveau mot de passe ; le site continue de fonctionner."
 }

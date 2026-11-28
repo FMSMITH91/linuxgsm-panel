@@ -498,7 +498,15 @@ outbound access is added. The panel writes the file again at the next install if
 newest 7 by default). Restoring stops the site, takes a safety backup first, then puts the files and
 databases back, and starts the site again only if it was running. The Overview shows when the newest backup
 was taken. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
-their connection settings on request, which is written to the audit log. The site's first database restarts a
+their connection settings on request, which is written to the audit log. Every stored password the panel shows
+(a database's, the object cache's, a game server's database on its Databases tab) is a row of dots until you press
+Show (the eye; Copy copies it without showing it), and goes back to dots by itself after 30 seconds or when you
+leave the tab. **Reset password** gives the database's user a new password. For the database a one-click app was
+installed with (WordPress, phpBB, Drupal, MyBB, SMF), the app's settings file gets the new password in the same
+step, and the panel checks that the site's database answers it from the site's own network: if anything fails, the
+old password is put back in both places and the site keeps working. A Node.js app's variable that holds the
+password gets the new one, and the app is restarted. For any other database the dialog warns that the site's code
+must be given the new password, which is then shown under the row (as dots until Show). The site's first database restarts a
 running site (a stopped one from its next start), so its code reaches the database server at once. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
 site stays offline for another try. A site still being set up cannot be deleted until that finishes or fails.
