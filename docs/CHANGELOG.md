@@ -34,6 +34,9 @@ dated section below lists what that day's releases changed, newest first; the nu
   Update now (players are warned in chat first) or Update when empty. Steam games update by themselves at
   night when nobody is on; Minecraft and a few others stay manual by default, because a new release can lock
   out players on older versions, and the page says why.
+- **Websites can live in a folder of a domain.** Add a folder such as /forums to a domain you already have,
+  and install WordPress, phpBB, Drupal, MyBB, SMF or your own site there. A subdomain (forums.example.com)
+  stays the safer choice, because browsers keep its sign-ins apart; the page says so beside the option.
 
 ### Changed
 
@@ -43,6 +46,9 @@ dated section below lists what that day's releases changed, newest first; the nu
   what it updates (a game by its own name, LinuxGSM, the panel, an add-on or a website) and shows the
   installed and the available version; a new Paper build of the same Minecraft version says players are not
   locked out. The note beside Update everything safe now wraps instead of being cut off.
+- **Settings are shown open, never tucked away.** Every section that holds a setting now starts open, across
+  the panel; if you close one, your browser remembers it. A setting that does not apply to a site shows greyed
+  with the reason, and a website's Overview reads like "WordPress 7.1.5 · PHP 8.4".
 
 ### Fixed
 
