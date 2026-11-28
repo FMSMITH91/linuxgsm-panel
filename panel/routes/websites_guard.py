@@ -29,6 +29,7 @@ from panel.services import websites_guard as _wg
 
 CURSOR_KEY = "websites_guard_seq"
 S_NOT_BLOCKED = "That address is not blocked on this website."
+S_ALREADY = "It was already unblocked."
 # The helper's event kinds: a ban ended by its time (unban), lifted on the host before its time (lift: fail2ban's unbanip
 # by hand), every ban of a jail lifted at once (flush: the jail stopped or restarted). The panel's own Unblock is a
 # "release", audited by its route with who asked.
@@ -175,6 +176,10 @@ def register(app):
         if not ok:
             return _w.say(502, got)
         if ip not in {e["ip"] for e in site_entries(site, got)}:
+            # Lifted already (its ban ended, or fail2ban's unbanip on the host): the host lists it nowhere, so the
+            # row the page still shows goes. An address another site's attackers list holds is not this site's to lift.
+            if _wg.is_address(ip) and ip not in {e["ip"] for e in got}:
+                return jsonify({"success": True, "message": i18n.tr(S_ALREADY), "already": True})
             return _w.say(404, S_NOT_BLOCKED)
         ok, said = _w.host_call(_sw.guard_release, site.remote, ip)
         return _w.acted(site, "website_unban", ok, said, "%s unblocked by hand" % ip if ok

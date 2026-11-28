@@ -86,6 +86,17 @@ def _net(text):
         return None
 
 
+def is_address(text):
+    """Whether `text` is one visitor's address as the deny list names it (IPv4 or IPv6, no zone, no network)."""
+    if not isinstance(text, str) or "%" in text or "/" in text or len(text) > 45:
+        return False
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
 def settings(raw):
     """DEFAULTS overlaid with the valid keys of `raw` (WebsiteProxy.guard, JSON text or a dict)."""
     if isinstance(raw, str):

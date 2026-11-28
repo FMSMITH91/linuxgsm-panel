@@ -197,6 +197,39 @@ def _s2_site(host, su):
 
 
 # ── 3. Unblock of an address already lifted ────────────────────────────────────────────────────────
+def _s3_lifted(host, su):
+    from panel.routes import websites_guard as _rg
+    a, b = _site324(host, "p324d"), _site324(host, "p324e")
+    f2b = _F2b322()
+    d, seams = _guard_tree324(f2b)
+    try:
+        _rg._set_cursor(host.id, 0)
+        _log_line324(_V324, "login", a.domains[0].domain)
+        _log_line324(_O324, "login", b.domains[0].domain)
+        t = "%.3f" % _time324.time()
+        for ip in (_V324, _O324):
+            f2b.banned["lgsm-web-login"].add(ip)
+            _f2b_act324("actionban", {"ip": ip, "name": "lgsm-web-login", "time": t, "bantime": 600, "restored": 0})
+        listed = _V324 in _blocked324(su, a)[0]
+        f2b(["fail2ban-client", "set", "lgsm-web-login", "unbanip", _V324])      # by hand, on the host
+        del f2b.calls[:]
+        c = _client324(su.id)
+        lifted = c.post("/websites/%d/blocked/unban" % a.id, json={"ip": _V324})
+        other = _client324(su.id).post("/websites/%d/blocked/unban" % a.id, json={"ip": _O324})
+        junk = _client324(su.id).post("/websites/%d/blocked/unban" % a.id, json={"ip": "not-an-address"})
+        released = [x for x in f2b.calls if x[:1] == ["set"]]
+    finally:
+        seams.restore()
+        _shutil324.rmtree(d, ignore_errors=True)
+    eq("blocked visitors (POST /websites/<id>/blocked/unban of an address fail2ban's unbanip already lifted on the "
+       "host): it answers yes, said as already unblocked, so the page drops the row",
+       (listed, lifted.status_code, _p9_json(lifted).get("success"), _p9_json(lifted).get("message")),
+       (True, 200, True, "It was already unblocked."))
+    eq("blocked visitors (Unblock, control: an address only another site's list holds, or no address at all): still "
+       "not this site's to lift, and fail2ban is not asked to",
+       (other.status_code, junk.status_code, released), (404, 404, []))
+
+
 # ── 4. Run state and status: the game account's own sockets ────────────────────────────────────────
 _PMC_UDP324 = "udp   UNCONN 0      0                 *:25565            *:*    uid:1102 ino:91 sk:1 <->"
 _PMC_TCP324 = "tcp   LISTEN 0      4096              *:25566            *:*    uid:1102 ino:92 sk:2 <->"
@@ -457,6 +490,7 @@ _PAGES324 = (
 _HOST324 = (
     _s1_until,
     _s2_site,
+    _s3_lifted,
 )
 _GAME324 = (
 )
