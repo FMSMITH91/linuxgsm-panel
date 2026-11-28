@@ -132,8 +132,11 @@ def _s1_log_dir():
 
 # ── the guard's scratch tree (sections 3 to 6) ─────────────────────────────────────────────────────
 def _tree322(d, writes, f2b):
-    """The helper's guard paths in scratch folder `d`; every file write recorded in `writes` as (name, mode, uid,
-    gid); fail2ban answered by `f2b(argv)` (argv without the tool's path)."""
+    """The helper's guard paths in scratch folder `d`, with its writes and fail2ban recorded.
+
+    Every file write is recorded in `writes` as (name, mode, uid, gid); fail2ban is answered by `f2b(argv)` (argv
+    without the tool's path).
+    """
     paths = {"WEB_DENY_DIR": os.path.join(d, "deny"), "WEB_GUARD_NEVER": os.path.join(d, "guard-never"),
              "WEB_GUARD_EVENTS": os.path.join(d, "guard-events"), "WEB_LOG_DIR": os.path.join(d, "log"),
              "WEB_SECURITY_LOG": os.path.join(d, "log", "security.log"), "WEB_F2B_DIR": d,

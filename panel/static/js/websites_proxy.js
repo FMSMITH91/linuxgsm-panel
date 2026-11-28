@@ -128,7 +128,7 @@
     WS.show('wp-guard-on-note', switchOn('wp-guard-on') === false);
     WS.show('wp-guard-increment-note', switchOn('wp-guard-increment') === false);
     // OWASP's example of a fixed lockout is 10 minutes: a shorter first ban gets the note (it is still saved).
-    var ban = WS.el('wp-guard-bantime'), mins = ban ? Number(String(ban.value || '').trim()) : NaN;
+    var ban = WS.el('wp-guard-bantime'), mins = ban ? Number(String(ban.value || '').trim()) : Number.NaN;
     WS.show('wp-guard-bantime-note', Number.isFinite(mins) && mins > 0 && mins < 10);
   };
   // A save that applies the configuration again replaces what the status line said of the last apply: a refusal shows
