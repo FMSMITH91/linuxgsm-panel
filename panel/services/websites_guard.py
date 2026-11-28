@@ -57,6 +57,7 @@ DEFAULTS = {"enabled": True, "login": 10, "scan": 3, "findtime": 600, "bantime":
 LIMITS = {"login": (1, 1000), "scan": (1, 1000), "findtime": (60, 86400), "bantime": (60, 2592000),
           "maxtime": (60, 31536000)}
 ALLOW_MAX = 100
+OWASP_BANTIME = 600     # OWASP's example of a fixed lockout (Authentication Cheat Sheet, "Account Lockout"): 10 minutes
 # OWASP's own words beside each field (it gives no number but the lockout example).
 OWASP_TEXT = {
     "login": "OWASP gives no number: a limit of attempts within a window.",
@@ -170,6 +171,8 @@ def owasp_notes(s):
                             "on these websites.")
     if not s["increment"]:
         notes["increment"] = "OWASP recommends a ban that grows each time the same address is banned again."
+    if s["bantime"] < OWASP_BANTIME:
+        notes["bantime"] = "Shorter than OWASP's example of a 10-minute lockout. It is still saved."
     return notes
 
 

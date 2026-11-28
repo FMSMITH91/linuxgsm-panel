@@ -508,6 +508,18 @@ def _s8_blocked_page():
        (got.get("left"), got.get("n"), got.get("msg")), (0, "0", "%s is no longer blocked." % _VISITOR322))
 
 
+def _s8_guard_note(st):
+    from panel.routes.websites_proxy import guard_json
+    from panel.routes import websites as _w
+    row = _w.proxy_row(st.host.id)
+    notes = {}
+    for minutes in (1, 10):
+        row.guard = _json322.dumps({"bantime": minutes * 60})
+        notes[minutes] = sorted(guard_json(row)["notes"])
+    eq("guard settings (the card's notes, websites_proxy.guard_json): a first ban below OWASP's example of a 10-minute "
+       "lockout gets its note, still saved; 10 minutes none", notes, {1: ["bantime"], 10: []})
+
+
 # ── 9. The Updates page ──────────────────────────────────────────────────────────────────────────
 def _server322(st):
     gs = _GS322(name="p322-game", game_type="cod4", short_name="p322cod", port=28961, remote_id=st.host.id,
@@ -631,7 +643,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

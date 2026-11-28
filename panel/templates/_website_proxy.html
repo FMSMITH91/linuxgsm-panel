@@ -130,8 +130,9 @@
         </div>
         <div class="col-6 col-sm-4">
           <label for="wp-guard-bantime" class="form-label small mb-1">First ban (minutes)</label>
-          <input type="number" id="wp-guard-bantime" class="form-control form-control-sm" min="1" max="43200" step="1">
+          <input type="number" id="wp-guard-bantime" class="form-control form-control-sm" min="1" max="43200" step="1" data-action="wsGuardCheck" data-on="input">
           <div id="wp-guard-bantime-owasp" class="form-text" data-no-i18n></div>
+          <div id="wp-guard-bantime-note" class="form-text text-warning" hidden>Shorter than OWASP's example of a 10-minute lockout. It is still saved.</div>
         </div>
         <div class="col-6 col-sm-4">
           <label for="wp-guard-maxtime" class="form-label small mb-1">Longest ban (hours)</label>
