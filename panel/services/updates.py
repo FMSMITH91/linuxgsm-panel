@@ -189,6 +189,21 @@ def next_start(remote, cfg, now=None):
     return {"at": cfg["start"], "end": cfg["end"], "zone": host_zone(remote), "today": today}
 
 
+def window_phase(remote, cfg, now=None):
+    """Where `remote`'s clock is against the nightly window: "now", "tonight" or "next".
+
+    "now" inside it; "next" when it opened less than 12 hours ago and is over (that night's window has run, the
+    next one is the next night's); else "tonight", the window still ahead. No host (None): "tonight".
+    """
+    if remote is None:
+        return "tonight"
+    wall = host_now(remote, now)
+    if window_key(wall, cfg) is not None:
+        return "now"
+    since = (wall.hour * 60 + wall.minute - _minutes(cfg["start"])) % 1440
+    return "next" if since < 720 else "tonight"
+
+
 # ── the signed catalog's security marks ────────────────────────────────────────────────────────
 def security():
     """{"addons", "sites", "note"} from the signed catalog's `security` section (the floor's when it has none)."""

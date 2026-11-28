@@ -72,16 +72,26 @@ def nav_url():
 
 
 # ── the rows ───────────────────────────────────────────────────────────────────────────────────
-def _when_auto(auto, security, cfg, tried=False):
-    """When the nightly window updates an item; `tried`: it was tried in tonight's window already and waits."""
+# When the window updates an item by itself, by where the host's clock is (services/updates.window_phase): inside
+# the window now, before tonight's start, or after it (the next night). A start already past never reads "tonight".
+WHEN_AUTO = {"now": "By itself now, in tonight's window (until {end}, the host's clock).",
+             "tonight": "By itself tonight at {at} (the host's clock).",
+             "next": "By itself the next night at {at} (the host's clock)."}
+WHEN_SECURITY = {
+    "now": "A security update: it installs by itself now, in tonight's window (until {end}), though automatic updates "
+           "are off for it.",
+    "tonight": "A security update: it installs by itself tonight at {at}, though automatic updates are off for it.",
+    "next": "A security update: it installs by itself the next night at {at}, though automatic updates are off for it."}
+
+
+def _when_auto(auto, security, cfg, tried=False, remote=None):
+    """When the nightly window updates an item on `remote`; `tried`: it was tried in tonight's window already and waits."""
     if tried and (auto or security):
         return U.tr("Tried in tonight's window, it waits: by itself the next night at {at} (the host's clock).",
                     at=cfg["start"])
-    if auto:
-        return U.tr("By itself tonight at {at} (the host's clock).", at=cfg["start"])
-    if security:
-        return U.tr("A security update: it installs by itself tonight at {at}, though automatic updates are off "
-                    "for it.", at=cfg["start"])
+    if auto or security:
+        said = (WHEN_AUTO if auto else WHEN_SECURITY)[U.window_phase(remote, cfg)]
+        return U.tr(said, at=cfg["start"], end=cfg["end"])
     return U.tr("Automatic updates are off for it: it waits for Update now.")
 
 
@@ -182,7 +192,7 @@ def _addon_row(gs, k, seen, cfg, sec):
                 what=what + ([sec["note"]] if security and sec["note"] else []),
                 notes=[{"title": U.tr("Release notes"), "url": _ad.CATALOG[k]["source"] + "/releases"}],
                 cost=U.tr(U.COST_ADDON), safe=True, security=security, auto=auto, auto_editable=True,
-                when=_when_auto(auto, security, cfg, tried),
+                when=_when_auto(auto, security, cfg, tried, gs.remote),
                 action={"post": url_for("api_server_addon_update", server_id=gs.id, addon_id=k), "step_up": True},
                 link=url_for("server_detail", server_id=gs.id))
 
@@ -240,7 +250,7 @@ def site_schedule(site, cfg=None, sec=None):
     ref = "website:%d" % site.id
     auto, security = U.auto_on(ref, cfg), U.site_part(site) in sec["sites"]
     tried = site.remote is not None and UA.tried_now(ref, site.remote, cfg)
-    return {"auto": auto, "security": security, "at": cfg["start"], "when": _when_auto(auto, security, cfg, tried),
+    return {"auto": auto, "security": security, "at": cfg["start"], "when": _when_auto(auto, security, cfg, tried, site.remote),
             "note": "" if auto else U.tr(U.S_AUTO_OFF_NOTE), "cost": site_cost(site)}
 
 
@@ -320,8 +330,38 @@ def history(user):
     zones = _row_zones(rows)
     return [{"at": r.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ") if r.timestamp else "",
              "at_host": host_time(r.timestamp, zones.get(r.id)) if r.timestamp else "", "who": r.username or "",
-             "action": r.action, "target": r.target or "", "ok": bool(r.success), "detail": (r.detail or "")[:300]}
+             "action": r.action, "target": r.target or "", "ok": bool(r.success), "badge": _badge(r),
+             "detail": plain_detail(r)}
             for r in rows]
+
+
+_BUILT_RE = re.compile(r"Updated to build ([A-Za-z0-9][A-Za-z0-9._+:-]{0,63})\. ")
+
+
+def _badge(r):
+    """The History's mark for an audit row: done, failed, waited (the window skipped it), queued or cancelled."""
+    if r.action == "update_when_empty":
+        return "queued" if r.detail == "queued" else "cancelled"
+    if r.action == "update_skipped":
+        return "waited"
+    return "done" if r.success else "failed"
+
+
+def plain_detail(r):
+    """What the History says of an audit row, in the viewer's words.
+
+    A game update's end is one plain line (the build it installed when the panel read it); LinuxGSM's raw output
+    stays in the audit log, never cut mid-word here. Update when empty says what it waits for.
+    """
+    if r.action == "update_when_empty":
+        return U.tr("Queued for when players leave." if r.detail == "queued" else "No longer waiting for players to "
+                    "leave.")
+    if r.action == "update_complete":
+        if not r.success:
+            return U.tr("The update failed: the audit log keeps LinuxGSM's output.")
+        m = _BUILT_RE.match(r.detail or "")
+        return U.tr("Updated to build {build}.", build=m.group(1)) if m else U.tr("Updated.")
+    return (r.detail or "")[:300]
 
 
 def _settings_json(user, cfg):

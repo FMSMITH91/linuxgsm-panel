@@ -631,9 +631,9 @@ def _s9_sites(st):
        (any("Site Health" in w for w in r_wp.get("what") or []), r_wp.get("cost"), r_php.get("cost")),
        (True, _u.tr(_u.COST_SITE), _u.tr(_u.COST_SITE_BUILD)))
     eq("Updates (the nightly window tried a busy site tonight): its row says it waits for the next night, not "
-       "\"tonight\" again; a site not tried yet still says tonight (control)",
-       ("next night at %s" % start in r_busy.get("when", ""), "By itself tonight at %s" % start in r_php.get("when", "")),
-       (True, True))
+       "\"tonight\" again; a site not tried yet says it updates now, in tonight's window (control)",
+       ("next night at %s" % start in r_busy.get("when", ""),
+        "By itself now, in tonight's window (until %s" % end in r_php.get("when", "")), (True, True))
     st.host.timezone = "America/New_York"
     _db322.session.commit()
     hist = [h for h in _updates322(su)[1].get("history") or [] if h.get("target") == busy.name]

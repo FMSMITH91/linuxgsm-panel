@@ -56,19 +56,48 @@ def cost(gs):
     return U.tr(COST_MEASURED, n=mins) if mins else U.tr(COST_UNMEASURED)
 
 
+# The nightly window's words for a game, by where its host's clock is (services/updates.window_phase).
+WHEN_WINDOW = {"now": "By itself now, in tonight's window (until {end}, the host's clock), if no players are on.",
+               "tonight": "By itself tonight at {at} (the host's clock), if no players are on.",
+               "next": "By itself the next night at {at} (the host's clock), if no players are on."}
+
+
 def when(gs, auto, cfg):
-    """(when, link) of a game update: its own scheduled update task, the queue, or the nightly window."""
+    """(when, link) of a game update: the queue a person asked for, its own scheduled update task, or the window.
+
+    The queue first: Update when empty runs it as soon as nobody is on, before any task or window would.
+    """
+    if gs.update_pending:
+        return U.tr("Queued: it updates as soon as no players are on."), None
     cron = (U.lgsm_cron_seen(gs.id) or {}).get("game")
     if cron:
         return U.tr("By itself: its scheduled task runs update ({schedule}, the host's clock).", schedule=cron), None
-    if gs.update_pending:
-        return U.tr("Queued: it updates as soon as no players are on."), None
     if not auto:
         return U.tr("Automatic updates are off for it: it waits for Update now."), None
     if UA.tried_now("game:%d" % gs.id, gs.remote, cfg):
         return U.tr("Tried in tonight's window, it waits: by itself the next night at {at} (the host's clock).",
                     at=cfg["start"]), None
-    return U.tr("By itself tonight at {at} (the host's clock), if no players are on.", at=cfg["start"]), None
+    return U.tr(WHEN_WINDOW[U.window_phase(gs.remote, cfg)], at=cfg["start"], end=cfg["end"]), None
+
+
+S_CONFIRM_TITLE = "Update {name} now?"
+S_WARNED_FIRST = ("The {n} player(s) on now are warned in the game first: by the panel 1 minute before the update, or "
+                  "by LinuxGSM's own countdown where its warning timer is set.")
+S_NOT_WARNED = "The {n} player(s) on now are not warned first: this game's console has no chat command the panel uses."
+
+
+def confirm(gs):
+    """(title, body) of Update now's question: the server by name, what it costs, and whether players are warned.
+
+    The player count is the one the panel last read (monitoring's cache); the page asks no host anything.
+    """
+    from panel.services import schedule_chains as _sch
+    from panel.services.monitoring import _cached_player_count
+    body = [cost(gs)]
+    players = _cached_player_count(gs.id)
+    if isinstance(players, int) and players > 0 and gs.status in ("online", "starting", "unresponsive"):
+        body.append(U.tr(S_WARNED_FIRST if _sch.say_verb(gs.game_type) else S_NOT_WARNED, n=players))
+    return U.tr(S_CONFIRM_TITLE, name=gs.name), " ".join(body)
 
 
 def _checked_at(gs, at):
@@ -90,10 +119,11 @@ def game_row(gs, got, cfg):
              if got.get("appid") else [])
     said, link = when(gs, auto, cfg)
     post = url_for("api_updates_game", server_id=gs.id)
+    title, body = confirm(gs)
     return _row("game", "game:%d" % gs.id, gs.name, host=gs.remote.display_name if gs.remote else "", what=what,
                 notes=notes, cost=cost(gs), auto=auto, auto_editable=True, when=said, when_link=link,
                 auto_why=U.tr(_gu.default_auto(gs.game_type)[1]), backup=str(gs.id) in cfg["backup"],
-                action={"post": post, "body": {"when": "now"}, "confirm": cost(gs)},
+                action={"post": post, "body": {"when": "now"}, "confirm": body, "confirm_title": title},
                 later={"post": post, "queued": bool(gs.update_pending)},
                 backup_post=url_for("api_updates_game_backup", server_id=gs.id),
                 link=url_for("server_detail", server_id=gs.id))
@@ -159,9 +189,12 @@ def register(app):
         else:
             return _refused(S_DENIED, 400)
         U.forget_counts()
-        # Said as the server page says its own actions' answers (Sentences, translated whole).
+        # Said as the server page says its own actions' answers (Sentences, translated whole). `when`: the row's line
+        # as it reads now (a queued update says so before any task or window).
         from panel.routes.server_detail import _r15e_said
-        return jsonify({"success": bool(ok), "message": _r15e_said(msg), "queued": bool(gs.update_pending)})
+        cfg = U.settings()
+        return jsonify({"success": bool(ok), "message": _r15e_said(msg), "queued": bool(gs.update_pending),
+                        "when": when(gs, U.game_auto_on(gs, cfg), cfg)[0]})
 
     @app.route("/api/updates/game/<int:server_id>/backup", methods=["POST"])
     @login_required

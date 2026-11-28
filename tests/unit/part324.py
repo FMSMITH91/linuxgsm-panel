@@ -375,8 +375,106 @@ def _rows324(su):
     return {r["ref"]: r for g in body.get("groups") or [] for r in g["items"]}, body
 
 
+def _s6_queue_first(host, su, gs):
+    _p9_patch(_sh324, "game_account_write_refusal", lambda *a, **k: None)
+    _gu324.note_output(gs.id, _STEAM324)
+    _u324.note_lgsm_cron(gs.id, [{"command": "/home/p324gmod/gmodserver update > /dev/null 2>&1",
+                                  "schedule": "15 5 * * *"}])
+    c = _client324(su.id)
+    queued = _p9_json(c.post("/api/updates/game/%d" % gs.id, json={"when": "empty"}))
+    row = _rows324(su)[0].get("game:%d" % gs.id) or {}
+    cancel = _p9_json(_client324(su.id).post("/api/updates/game/%d" % gs.id, json={"when": "cancel"}))
+    _u324.note_lgsm_cron(gs.id, [])
+    eq("Updates (Update when empty on a server whose own task runs update): the row and the answer say it is queued "
+       "first, before the task; Don't wait answers with the task's line again",
+       (queued.get("when"), row.get("when"), cancel.get("when")),
+       ("Queued: it updates as soon as no players are on.", "Queued: it updates as soon as no players are on.",
+        "By itself: its scheduled task runs update (15 5 * * *, the host's clock)."))
+
+
+def _s6_confirm(host, su, gs):
+    gs.status = "online"          # a running server (section 4's server list read the host's ports)
+    _db324.session.commit()
+    _gu324.note_output(gs.id, _STEAM324)
+    out = {}
+    for n in (3, 0):
+        _p9_patch(_mon324, "_cached_player_count", lambda sid, n=n: n)
+        row = _rows324(su)[0].get("game:%d" % gs.id) or {}
+        act = row.get("action") or {}
+        out[n] = (act.get("confirm_title"), "The 3 player(s) on now are warned in the game first" in
+                  (act.get("confirm") or ""), (act.get("confirm") or "").startswith(row.get("cost") or "?"))
+    eq("Updates (a game row's Update now): its question names the server, says what it costs and, with players on, "
+       "that they are warned in the game first and how long before",
+       out[3], ("Update p324-gmod now?", True, True))
+    eq("Updates (control: nobody on): the question names the server and its cost, no warning", out[0],
+       ("Update p324-gmod now?", False, True))
+
+
+def _s6_history(host, su, gs):
+    tail = ("ll, use YldRebuildInvalidPlatformTracking instead OK\n[ OK ] Starting gmodserver")
+    teed = {"out": _STEAM324 + "Success! App '4020' fully installed.\n"}
+    _p9_patch(_sd324, "_run_teed", lambda app, remote, sid, short, action, selfname, monitor=True:
+              (teed["out"], "", 0))
+    _p9_patch(_sd324, "_db_dump_before", lambda *a, **k: None)
+    _p9_patch(_sh324, "game_account_write_refusal", lambda *a, **k: None)
+    _gu324.note_output(gs.id, _STEAM324)
+    start = _db324.session.query(_db324.func.max(_Audit324.id)).scalar() or 0
+    _client324(su.id).post("/api/server/%d/action" % gs.id, json={"action": "update"})
+    deadline = _time324.time() + 10
+    while _time324.time() < deadline:
+        _db324.session.expire_all()
+        if _Audit324.query.filter(_Audit324.id > start, _Audit324.action == "update_complete").count():
+            break
+        _time324.sleep(0.05)
+    _log324(None, "update_complete", target=gs.name, server=gs, success=True, detail=tail)
+    _log324(None, "update_complete", target=gs.name, server=gs, success=False, detail=tail)
+    _log324(su, "update_when_empty", target=gs.name, server=gs, detail="queued")
+    _log324(su, "update_when_empty", target=gs.name, server=gs, detail="no longer queued")
+    hist = [(h["action"], h["badge"], h["detail"]) for h in _rows324(su)[1].get("history") or []
+            if h.get("target") == gs.name and h["action"] in ("update_complete", "update_when_empty")][:5]
+    eq("Updates (History, after the server page's Update ran in the background): an update's end is one plain line, "
+       "the build it installed when LinuxGSM printed it, else \"Updated.\"; a failed one says where its output is; "
+       "Update when empty says it waits for players to leave, or no longer does",
+       hist, [("update_when_empty", "cancelled", "No longer waiting for players to leave."),
+              ("update_when_empty", "queued", "Queued for when players leave."),
+              ("update_complete", "failed", "The update failed: the audit log keeps LinuxGSM's output."),
+              ("update_complete", "done", "Updated."),
+              ("update_complete", "done", "Updated to build 12399999.")])
+
+
 def _hhmm324(minutes):
     return "%02d:%02d" % divmod(minutes % 1440, 60)
+
+
+def _s6_window_words(host, su, gs):
+    site = _site324(host, "p324w", kind="php", php_version="8.4")
+    site.image_digest, site.image_key = "localhost/p324-old:1", "files-1"
+    _db324.session.commit()
+    _ua324._DONE.clear()          # nothing tried in a window yet (section 5's tick ran on its own clock)
+    _gu324.note_output(gs.id, _STEAM324)
+    now = _time324.gmtime()
+    t = now.tm_hour * 60 + now.tm_min
+    out = {}
+    for name, (s, e) in (("open", (t - 1, t + 30)), ("over", (t - 180, t - 120)), ("ahead", (t + 120, t + 180))):
+        _cfg324.update_config(lambda cfg, s=s, e=e: cfg.update({_u324.CFG: {"start": _hhmm324(s), "end": _hhmm324(e),
+                                                                           "off": []}}))
+        _u324.forget_counts()
+        rows = _rows324(su)[0]
+        out[name] = ((rows.get("game:%d" % gs.id) or {}).get("when"), (rows.get("website:%d" % site.id) or {}).get("when"))
+    _cfg324.update_config(lambda cfg: cfg.pop(_u324.CFG, None))
+    s0, e0 = _hhmm324(t - 1), _hhmm324(t + 30)
+    eq("Updates (the rows' window words, on the host's clock): inside the window they say it updates now, in tonight's "
+       "window, until its end, never a start already past",
+       out["open"], ("By itself now, in tonight's window (until %s, the host's clock), if no players are on." % e0,
+                     "By itself now, in tonight's window (until %s, the host's clock)." % e0))
+    eq("Updates (the window ran a while ago and is over): the next night, at its start",
+       out["over"], ("By itself the next night at %s (the host's clock), if no players are on." % _hhmm324(t - 180),
+                     "By itself the next night at %s (the host's clock)." % _hhmm324(t - 180)))
+    eq("Updates (control: the window is still ahead tonight): tonight, at its start", out["ahead"],
+       ("By itself tonight at %s (the host's clock), if no players are on." % _hhmm324(t + 120),
+        "By itself tonight at %s (the host's clock)." % _hhmm324(t + 120)))
+    check("Updates (window words): the open window's start is not said as a time ahead", s0 not in (out["open"][0] or ""),
+          out["open"])
 
 
 # ── 6 and 7. The pages' scripts ────────────────────────────────────────────────────────────────────
@@ -414,6 +512,21 @@ def _updates_page324():
     return _page301("updates.html", P9_ADMIN, allowed=True)
 
 
+def _s6_safe_why():
+    page = _updates_page324()
+    osrow = {"kind": "os", "ref": "os:1", "name": "host", "host": "", "what": ["2 package(s)"], "notes": [], "cost": "c",
+             "security": False, "safe": False, "auto": None, "auto_editable": False, "when": "w", "when_link": None,
+             "action": {"href": "/remote/1?update=os#os-updates"}, "link": ""}
+    host = _node324(page, ["updates.js"], _SAFE_SCN324, {"/api/updates": _upd_body324([osrow])})
+    empty = _node324(page, ["updates.js"], _SAFE_SCN324, {"/api/updates": _upd_body324([])})
+    eq("Updates page (js/updates.js, only a host's packages listed): the greyed button's reason is what they need (a "
+       "restart or a reboot, run from their own page), never that they are not the viewer's",
+       (host.get("disabled"), host.get("why"), host.get("error")),
+       (True, "What is listed can restart services or need a reboot: its Update now opens the page that runs it.", None))
+    eq("Updates page (nothing listed): the greyed button says there is nothing to update now",
+       (empty.get("disabled"), empty.get("why"), empty.get("error")), (True, "Nothing to update now.", None))
+
+
 _GAME_SCN324 = r"""
   for (let i = 0; i < 6; i++) await tick();
   const btns = $('upd-list').querySelectorAll('button');
@@ -440,6 +553,26 @@ def _game_page324():
                              history=hist),
         "/api/updates/game/5": {"success": True, "message": "Queued", "queued": True,
                                 "when": "Queued: it updates as soon as no players are on."}})
+
+
+def _s6_when_line():
+    got = _game_page324()
+    eq("Updates page (a game row, Update when empty): the row's line turns into the queue's at once",
+       ("Queued: it updates as soon as no players are on." in (got.get("when") or ""),
+        "By itself tonight." in (got.get("when") or ""), got.get("error")), (True, False, None))
+
+
+def _s6_title():
+    got = _game_page324()
+    eq("Updates page (a game row, Update now): its question carries the server's name", (got.get("title"),
+                                                                                         got.get("error")),
+       ("Update gm now?", None))
+
+
+def _s6_badge():
+    got = _game_page324()
+    eq("Updates page (History): a queued update is marked queued, not done",
+       ("Queued" in (got.get("hist") or ""), "Done" in (got.get("hist") or ""), got.get("error")), (True, False, None))
 
 
 # ── 8. An apply loads through the admin socket when both sides have it ────────────────────────────
@@ -556,6 +689,10 @@ def _ran324(step, *args):
 
 _ran324.last = ""
 _PAGES324 = (
+    _s6_safe_why,
+    _s6_when_line,
+    _s6_title,
+    _s6_badge,
 )
 _HOST324 = (
     _s1_until,
@@ -565,6 +702,10 @@ _HOST324 = (
     _s5_left_stopped,
 )
 _GAME324 = (
+    _s6_queue_first,
+    _s6_confirm,
+    _s6_history,
+    _s6_window_words,
 )
 _USER324 = (
 )

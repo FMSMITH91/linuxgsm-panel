@@ -566,6 +566,8 @@ _trips320 = len(_P9_TRIPPED)
 with _p9.app_context():
     try:
         _p9_arm(who="part320")
+        # The rows' window words by the clock's phase are part324's: pinned here to before tonight's start.
+        _p9_patch(_u320, "window_phase", lambda remote, cfg, now=None: "tonight")
         _seams320()
         _p9_patch(_so320, "panel_update_cached", lambda: None)
         _host320, _su320 = _rows320()

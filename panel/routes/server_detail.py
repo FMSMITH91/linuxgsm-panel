@@ -1165,15 +1165,18 @@ def _bg_action(app, gs, remote, action, on_done=None):
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 oc = _lgp.outcome_of(out, rc, action)
-                _gu.after_run(server_id, action, out, rc, oc is None, time.time() - t0)   # the Updates page's row
+                built = _gu.after_run(server_id, action, out, rc, oc is None, time.time() - t0)   # the Updates row
                 if oc is not None:
                     # Postponed (update, backup) or refused (workshop-update, validate): said as
                     # that, and nothing was changed on the host, so nothing below applies.
                     ok, detail = _lg264_said(oc, action, gs, gs is not None,
                                              (None, None, gs.name if gs else short_name))
                     return
+                # The build an update installed leads the row (the Updates page's History says it); the raw
+                # output's tail follows it, for the audit log.
+                lead = "Updated to build %s. " % built if built else ""
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
-                           success=(rc == 0), detail=detail[-300:], server=gs)
+                           success=(rc == 0), detail=lead + detail[-(300 - len(lead)):], server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the
                 # cached port scan so the dashboard shows the real state on its next poll.
                 _sm._invalidate_port_scan(remote_id)

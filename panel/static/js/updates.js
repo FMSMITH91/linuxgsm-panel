@@ -1,9 +1,9 @@
 // The Updates page (templates/updates.html). GET /api/updates:
 //   {groups: [{key, title, items: [{kind, ref, name, host, what: [..], notes: [{title, url}], cost, security,
-//     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up, confirm} | {href} |
-//     null, link; a game row also: auto_why, backup, backup_post, later: {post, queued}}]}], count,
-//    settings: {start, end, can_edit, owasp_auto, off, checking, can_check},
-//    history: [{at, at_host (on the clock of the host the row is about), who, action, target, ok, detail}]}
+//     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up, confirm,
+//     confirm_title} | {href} | null, link; a game row also: auto_why, backup, backup_post, later: {post, queued}}]}],
+//    count, settings: {start, end, can_edit, owasp_auto, off, checking, can_check},
+//    history: [{at, at_host (on the clock of the host the row is about), who, action, target, ok, badge, detail}]}
 // Every text the server sends is already in the viewer's language. Update now runs the item's own route
 // (or opens the card that runs it, with that card's confirmation); nothing here decides what the server allows.
 (function () {
@@ -85,17 +85,30 @@
     }).catch(function () { say('upd-msg', T('Couldn\'t read the updates.'), 'error'); if (b) b.disabled = false; });
   };
 
-  // A greyed "Update everything safe now" says why beside it (the button stays in its place).
+  // A greyed "Update everything safe now" says why beside it (the button stays in its place), by what is listed:
+  // nothing at all; a row this viewer may run that kicks players; a row whose Update now opens its own page (the
+  // panel's update and the hosts' packages, which can restart services or need a reboot); else rows they may not run.
   function safeWhy(groups, safe) {
     var why = document.getElementById('upd-safe-why');
     if (!why) return;
-    var rows = 0, runnable = 0;
-    groups.forEach(function (g) { g.items.forEach(function (r) { rows++; if (r.action && r.action.post) runnable++; }); });
-    why.textContent = safe || !rows ? '' : runnable
-      ? T('Nothing listed can run now without kicking players or a reboot.')
-      : T('None of these is yours to update now: its administrators or the nightly window update it.');
-    why.hidden = !why.textContent;
+    var rows = 0, runnable = 0, pages = 0;
+    groups.forEach(function (g) {
+      g.items.forEach(function (r) {
+        rows++;
+        if (r.action && r.action.post) runnable++;
+        else if (r.action && r.action.href) pages++;
+      });
+    });
+    if (safe) { hideWhy(why); return; }
+    var text;
+    if (!rows) text = T('Nothing to update now.');
+    else if (runnable) text = T('Nothing listed can run now without kicking players or a reboot.');
+    else if (pages) text = T('What is listed can restart services or need a reboot: its Update now opens the page that runs it.');
+    else text = T('None of these is yours to update now: its administrators or the nightly window update it.');
+    why.textContent = text;
+    why.hidden = false;
   }
+  function hideWhy(why) { why.textContent = ''; why.hidden = true; }
 
   // Off is a lasting note on the page, never a block (OWASP's recommended value is on).
   function renderOff(off) {
@@ -144,22 +157,23 @@
     wrap.appendChild(when);
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');
-    wrap.appendChild(controls(r, out));
+    wrap.appendChild(controls(r, out, when));
     if (r.auto_why) wrap.appendChild(line('info-circle', r.auto_why, 'text-secondary'));
     wrap.appendChild(out);
     return wrap;
   }
-  // A row's buttons and switches; each answers in `out`.
-  function controls(r, out) {
+  // A row's buttons and switches; each answers in `out` (`when`: the row's clock line).
+  function controls(r, out, when) {
     var ctl = el('div', 'd-flex flex-wrap gap-2 align-items-center mt-1');
     if (r.action) ctl.appendChild(actionButton(r, out));
-    if (r.later) ctl.appendChild(laterButton(r, out));
+    if (r.later) ctl.appendChild(laterButton(r, out, when));
     if (r.auto_editable) ctl.appendChild(autoSwitch(r, out));
     if (r.backup_post && r.auto) ctl.appendChild(backupSwitch(r, out));     // only the nightly window backs up first
     return ctl;
   }
   // Update when empty, or no longer wait: the server's own queue (the due-actions sweep runs it once nobody is on).
-  function laterButton(r, out) {
+  // The row's clock line follows (the server's `when`): a queued update says so before any task or window.
+  function laterButton(r, out, when) {
     var b = el('button', 'btn btn-sm btn-outline-secondary');
     b.type = 'button';
     var label = function (queued) {
@@ -175,7 +189,12 @@
         b.disabled = false;
         out.className = 'small mt-1 ' + (d.success ? 'text-success' : 'text-danger');
         out.textContent = d.message || '';
-        if (d.success) { queued = !!d.queued; label(queued); }
+        if (d.success) {
+          queued = !!d.queued;
+          label(queued);
+          var said = when && when.querySelector('span');
+          if (said && d.when) said.textContent = d.when;
+        }
       }).catch(function () { b.disabled = false; });
     });
     return b;
@@ -239,9 +258,10 @@
     b.addEventListener('click', function () {
       var go = function () { runUpdate(r, b, out); };
       var run = function () { if (r.action.step_up && window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); };
-      // A game update can kick players: what it costs is asked first (the row's own cost line).
+      // A game update can kick players: asked first, naming the server, with what it costs and whether the players
+      // on are warned (the server's words, already in the viewer's language).
       if (r.action.confirm && window.confirmDialog) {
-        window.confirmDialog({title: T('Update now'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Update now'),
+        window.confirmDialog({title: r.action.confirm_title || T('Update now'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Update now'),
           onConfirm: run, bodyText: r.action.confirm});
       } else run();
     });
@@ -307,15 +327,23 @@
     }).catch(function () { say('upd-window-msg', T('Couldn\'t save.'), 'error'); });
   };
 
+  // A History row's mark, from the server's `badge` (done, failed, waited, queued, cancelled).
+  function badgeOf(h) {
+    switch (h.badge) {
+      case 'waited': return ['text-bg-secondary', T('Waited')];
+      case 'queued': return ['text-bg-secondary', T('Queued')];
+      case 'cancelled': return ['text-bg-secondary', T('No longer queued')];
+      default: return h.ok ? ['text-bg-success', T('Done')] : ['text-bg-danger', T('Failed')];
+    }
+  }
   function historyItem(h) {
     var li = el('li', 'py-1 border-bottom');
     // On the clock of the host the row is about, as the nightly window's times are (the list says so once).
     var t = el('span', 'text-secondary text-nowrap', h.at_host || h.at);
     t.setAttribute('data-no-i18n', '');
     li.appendChild(t);
-    var skipped = h.action === 'update_skipped';
-    li.appendChild(el('span', 'ms-2 badge ' + (skipped ? 'text-bg-secondary' : h.ok ? 'text-bg-success' : 'text-bg-danger'),
-      skipped ? T('Waited') : h.ok ? T('Done') : T('Failed')));
+    var badge = badgeOf(h);
+    li.appendChild(el('span', 'ms-2 badge ' + badge[0], badge[1]));
     li.appendChild(el('span', 'ms-2', T(ACTIONS[h.action] || 'Update')));
     var who = el('span', 'ms-2 fw-semibold text-break', h.target);
     who.setAttribute('data-no-i18n', '');

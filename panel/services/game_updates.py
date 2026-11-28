@@ -109,17 +109,19 @@ def after_run(gs_id, action, out, rc, done, secs=None):
 
     An update prints the same lines as check-update before it applies them; one that exited 0 is on the remote build
     now, so its row goes. A failed one keeps its row. `secs` (an applied update's run time) prices the next one.
+    Returns the build an applied update installed ("" when none was applied, or its build was not printed).
     """
     if action not in ("update", "force-update") or not done or rc != 0:
-        return
+        return ""
     got = parse(out)
     if got["state"] == "unknown":
-        return
+        return ""
     if got["state"] == "available" and secs:
         with _LOCK:
             _SECS[gs_id] = max(1, int(secs))
     with _LOCK:
         _SEEN[gs_id] = dict(got, state="none", local=got["remote"] or got["local"], at=time.time(), failed=False)
+    return got["remote"] if got["state"] == "available" else ""
 
 
 def seen(gs_id):

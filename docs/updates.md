@@ -18,8 +18,13 @@ confirm. The pages that had their own Update buttons keep them, with a link here
 
 **Update everything safe now** updates, one at a time, every listed item that kicks no player and needs no reboot:
 websites, add-ons on servers with no players on, and LinuxGSM. It asks for your password first. When nothing listed
-is yours to run (a customer's sites, say), the button stays greyed with the reason beside it. **Update now** leaves
-its row in place with the result.
+is yours to run (a customer's sites, say), the button stays greyed with the reason beside it: nothing to update,
+an item that kicks players or needs a reboot, a host's packages or the panel's update (they can restart services or
+need a reboot, so their Update now opens their own page), or items their administrators or the nightly window update.
+**Update now** leaves its row in place with the result.
+
+Each row says when it updates by itself on its host's clock: tonight at the window's start, now (while the window
+is open, until its end), or the next night once tonight's window has run.
 
 The list is read from what the panel already knows (the daily OS check, the panel's update check, the daily game
 check, what the server and add-on pages last read), so opening the page asks no host anything. Who sees what follows the existing
@@ -36,19 +41,23 @@ wipe, a reboot, an install). **Check games now** on the page checks every server
 server page's own *check-update* and *Update* feed the same row, so the two always agree.
 
 **Update now** runs the server's own Update (LinuxGSM `update`, the same as the server page's button, with its
-console output and history). It asks first, with what it costs. With players on, on a game whose console has a chat
+console output and history). It asks first, naming the server, with what it costs and, with players on, whether
+they are warned first. With players on, on a game whose console has a chat
 command (Source, GoldSrc, idTech3, Minecraft), the panel says "The server restarts in 1 minute to install a game
 update." in the game and starts the update a minute later, unless LinuxGSM's own warning timer warns them already.
 LinuxGSM only stops the server when the builds differ, and starts it again only if it was running.
 
 **Update when empty** queues the update on the server: the same sweep that runs *Restart when empty* runs it once
-the server has no players (or is stopped). **Don't wait** takes it off the queue.
+the server has no players (or is stopped). The row then says it is queued, before any scheduled task or window.
+**Don't wait** takes it off the queue.
 
 **Automatic game updates** run in the nightly window, one server at a time, only with no players on (an unknown
 count on a running server waits too); otherwise the next night. With **Back up first at night** on, the panel stops a
 running server, backs it up (LinuxGSM's backup), updates it and starts it again: LinuxGSM's backup restarts a running
 server by itself, and an update straight after would stop it while it is still starting. A failed step starts the
-server again, is in the history, and sends the **Automatic update failed** alert. A server whose own scheduled task
+server again, is in the history, and sends the **Automatic update failed** alert. A server the window stopped and
+could not start again has a history row saying it was left stopped, and why, and the alert says so too. Each start is
+the dashboard's Start (its checks and history rows). A server whose own scheduled task
 runs `update` is left to that task. The default, with its reason shown beside the switch:
 
 | Game | Default | Why |
@@ -87,8 +96,10 @@ the weakness, and asks for a patch management process and staged rollouts instea
 ## History
 
 The **History** fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
-ended (done, failed, or waited for the next window). Each time is on the clock of the host the update ran on, as the
-window's times are. It is read from the audit log, so it shows the same rows the Audit Logs page shows you.
+ended (done, failed, waited for the next window, queued for when players leave). Each time is on the clock of the
+host the update ran on, as the window's times are. A game update's end reads as one line (the build it installed,
+when LinuxGSM printed it); its full output stays in the audit log. It is read from the audit log, so it shows the same
+rows the Audit Logs page shows you.
 
 ## Marking a security update in the catalog
 
