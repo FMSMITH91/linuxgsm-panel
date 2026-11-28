@@ -46,7 +46,7 @@ versions are LinuxGSM's own "Local build" and "Remote build", labelled by game:
 |---|---|---|
 | Paper (LinuxGSM `pmc`) | "Minecraft 26.3, Paper build 257" / "Minecraft 26.3, Paper build 263" | Same Minecraft version: "a new Paper build (fixes). Players are not locked out." A new Minecraft version: players whose game is older cannot join until they update it, and plugins may need updating. |
 | Velocity, Waterfall (`vpmc`, `wmc`) | "Velocity 3.4.0-SNAPSHOT, build 500" | The same, for the proxy's own version. |
-| Minecraft Java (`mc`) | "Minecraft 1.21.5"; a snapshot, pre-release or release candidate says so ("a test version") | A new version: players whose game is older cannot join until they update it. |
+| Minecraft Java (`mc`) | "Minecraft 1.21.5"; a snapshot, pre-release or release candidate says so ("a test version"), read from the version itself (a release on the snapshot branch is a release) | A new version: players whose game is older cannot join until they update it. |
 | Minecraft Bedrock (`mcb`) | "Minecraft Bedrock 1.21.70.03" | The same. |
 | Steam games | "build 25375524" / "build 25375525 (branch public)" | The game's SteamDB history link. |
 | Other games | LinuxGSM's own strings for the two builds | |

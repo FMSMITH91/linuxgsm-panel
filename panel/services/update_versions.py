@@ -9,7 +9,10 @@ per updater family from LinuxGSM's modules (v26.6.0):
     update_pmc.sh (pmc Paper, vpmc Velocity, wmc Waterfall): "<version>-<build>", the version being the project's
         (Minecraft's for Paper) and the build PaperMC's number within it; "0" when build.txt is missing.
     update_mc.sh: version.json's id ("1.21.5", a pre-release "1.21.5-pre1", a release candidate "1.21.5-rc1", a
-        snapshot "25w14a") and "* Branch: release" or "snapshot"; "0" when it could not read the jar.
+        snapshot "25w14a"; since 26.1 "26.1-snapshot-1", "26.1-pre-1", "26.1-rc-1") and "* Branch: release" or
+        "snapshot"; "0" when it could not read the jar. A version is marked a test version by its own id only: the
+        snapshot branch also installs releases (Mojang's newest version of either kind), so "26.3" there is a
+        release.
     update_mcb.sh: the version the console log printed ("1.21.70.03"); "0" when none.
     core_steamcmd.sh: Steam's build ids and "* Branch: <b>".
     every other update_<game>.sh: its own local and remote strings, shown as printed.
@@ -23,9 +26,9 @@ from panel.core import i18n
 # PaperMC's projects, by LinuxGSM shortname (update_pmc.sh's paperproject).
 PAPER_PROJECTS = {"pmc": "Paper", "vpmc": "Velocity", "wmc": "Waterfall"}
 _PAPER_RE = re.compile(r"(.{1,48})-([0-9]{1,9})")
-_SNAPSHOT_RE = re.compile(r"[0-9]{2}w[0-9]{2}[a-z]")
-_PRE_RE = re.compile(r".{1,40}-pre[0-9]{1,3}")
-_RC_RE = re.compile(r".{1,40}-rc[0-9]{1,3}")
+_SNAPSHOT_RE = re.compile(r"[0-9]{2}w[0-9]{2}[a-z]|.{1,40}-snapshot-[0-9]{1,3}")
+_PRE_RE = re.compile(r".{1,40}-pre-?[0-9]{1,3}")
+_RC_RE = re.compile(r".{1,40}-rc-?[0-9]{1,3}")
 _UNREAD = ("", "0")
 
 S_INSTALLED = "Installed: {version}"
@@ -82,9 +85,9 @@ def _paper(game_type, local, remote):
     return [have, want], notes
 
 
-def _mc_label(version, branch):
-    """A Minecraft: Java Edition version, marked when it is a snapshot, a pre-release or a release candidate."""
-    if branch == "snapshot" or _SNAPSHOT_RE.fullmatch(version):
+def _mc_label(version):
+    """A Minecraft: Java Edition version, marked when its id is a snapshot's, a pre-release's or a release candidate's."""
+    if _SNAPSHOT_RE.fullmatch(version):
         return _tr(S_MC_SNAPSHOT, version=version)
     if _PRE_RE.fullmatch(version):
         return _tr(S_MC_PRE, version=version)
@@ -93,11 +96,11 @@ def _mc_label(version, branch):
     return _tr(S_MC, version=version)
 
 
-def _minecraft(game_type, local, remote, branch):
+def _minecraft(game_type, local, remote):
     """([installed, available], notes) of a vanilla Minecraft or Minecraft Bedrock server."""
     if game_type == "mc":
-        have = _mc_label(local, branch) if local not in _UNREAD else _tr(S_NOT_READ)
-        want = _mc_label(remote, branch) if remote else _tr(S_REMOTE_NOT_READ)
+        have = _mc_label(local) if local not in _UNREAD else _tr(S_NOT_READ)
+        want = _mc_label(remote) if remote else _tr(S_REMOTE_NOT_READ)
     else:
         have = _tr(S_MCB, version=local) if local not in _UNREAD else _tr(S_NOT_READ)
         want = _tr(S_MCB, version=remote) if remote else _tr(S_REMOTE_NOT_READ)
@@ -128,7 +131,7 @@ def game_versions(game_type, got, steam):
     if gt in PAPER_PROJECTS:
         pair, notes = _paper(gt, local, remote)
     elif gt in ("mc", "mcb"):
-        pair, notes = _minecraft(gt, local, remote, branch)
+        pair, notes = _minecraft(gt, local, remote)
     else:
         pair, notes = _other(local, remote, branch, steam)
     return {"versions": labelled(pair[0], pair[1]), "notes": notes}

@@ -3,8 +3,9 @@
 1. Game rows (GET /api/updates): the row's title names the kind and the game by LinuxGSM's own name ("Game update:
    PaperMC"); the two builds LinuxGSM printed are two labelled lines, read per family: a Paper build of the same
    Minecraft version says players are not locked out, a new Minecraft version says older clients cannot join, a
-   Velocity build names Velocity, vanilla marks a snapshot, Steam shows its branch, a build LinuxGSM could not read is
-   said in words. Automatic updates' reason fits a same-version Paper build; its default stays off.
+   Velocity build names Velocity, vanilla marks a snapshot (by its version's own id, never by the branch, which also
+   installs releases), Steam shows its branch, a build LinuxGSM could not read is said in words. Automatic updates'
+   reason fits a same-version Paper build; its default stays off.
 2. The other rows (GET /api/updates): LinuxGSM, the panel, a host's packages, an add-on and a website each carry a
    title and an Installed and an Available line, and an unknown version is words, never "?". A French viewer reads
    them in French.
@@ -122,6 +123,19 @@ def _s1_families(host, su):
         "Game update: My voice server", ["Installed: 3.13.6", "Available: 3.13.7"]))
     check("game rows: no row shows a bare \"?\" for a version",
           not any("?" in v for g in got for v in g.get("versions") or []), [g.get("versions") for g in got])
+
+
+def _s1_snapshot_branch(host, su):
+    """A release on the snapshot branch is a release: the branch alone marked "Minecraft 26.3 (a snapshot)"."""
+    rel = _gs328(host, "p328-snaprel", "mc", _out328("26.3", "26.4-snapshot-2", "snapshot"))
+    pre = _gs328(host, "p328-snappre", "mc", _out328("26.4-pre-1", "26.4-rc-1", "snapshot"))
+    rows = _rows328(su.id)
+    eq("game rows (GET /api/updates, vanilla Minecraft on the snapshot branch): a release's version is a release, and a "
+       "version is marked a test version by its own id only, in Mojang's 26.x format (-snapshot-N, -pre-N, -rc-N)",
+       [(rows.get("game:%d" % g.id) or {}).get("versions") for g in (rel, pre)],
+       [["Installed: Minecraft 26.3", "Available: Minecraft 26.4-snapshot-2 (a snapshot: a test version)"],
+        ["Installed: Minecraft 26.4-pre-1 (a pre-release: a test version)",
+         "Available: Minecraft 26.4-rc-1 (a release candidate: a test version)"]])
 
 
 # ── 2. the other rows ─────────────────────────────────────────────────────────────────────────────
@@ -356,6 +370,8 @@ with _p9.app_context():
         _p9_patch(_so328, "panel_update_cached", lambda: None)
         _host328, _su328 = _setup328()
         check("part328: _s1_games ran to the end", _ran328(_s1_games, _host328, _su328), _ran328.last)
+        check("part328: _s1_snapshot_branch ran to the end", _ran328(_s1_snapshot_branch, _host328, _su328),
+              _ran328.last)
         check("part328: _s2_others ran to the end", _ran328(_s2_others, _host328, _su328), _ran328.last)
         check("part328: _s3_page ran to the end", _ran328(_s3_page), _ran328.last)
         check("part328: _s4_page_cache ran to the end", _ran328(_s4_page_cache, _host328, _su328), _ran328.last)
