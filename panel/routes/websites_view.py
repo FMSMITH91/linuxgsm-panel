@@ -492,9 +492,8 @@ def _manager_parts(out, site):
 
 def _folder_domains(site):
     """The domains the Domains tab's folder form offers: those held by sites the viewer manages on this host."""
-    from panel.routes.websites import manage_perm
     from panel.services import website_folders
-    return website_folders.host_domains(current_user, site, manage_perm)
+    return website_folders.host_domains(current_user, site)
 
 
 def _failed_logs(site):
