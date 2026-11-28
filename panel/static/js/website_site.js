@@ -347,6 +347,8 @@
     box.appendChild(document.createTextNode(' · '));
     box.appendChild(WS.node('span', null, WS.T('expires')));
     box.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(sc.not_after || '')));
+    // Said once here for every domain on it (a domain's own line no longer repeats it).
+    if (sc.warning) box.appendChild(WS.raw('span', 'd-block small text-warning text-break', String(sc.warning)));
   }
   // ── the site's certificate: automatic, or the operator's own (chain and key pasted once for the site) ──
   window.wsCertOpen = function () {

@@ -61,6 +61,18 @@
     renderHistory(d.history || [], false);
   }
 
+  // A greyed "Update everything safe now" says why beside it (the button stays in its place).
+  function safeWhy(groups, safe) {
+    var why = document.getElementById('upd-safe-why');
+    if (!why) return;
+    var rows = 0, runnable = 0;
+    groups.forEach(function (g) { g.items.forEach(function (r) { rows++; if (r.action && r.action.post) runnable++; }); });
+    why.textContent = safe || !rows ? '' : runnable
+      ? T('Nothing listed can run now without kicking players or a reboot.')
+      : T('None of these is yours to update now: its administrators or the nightly window update it.');
+    why.hidden = !why.textContent;
+  }
+
   // Off is a lasting note on the page, never a block (OWASP's recommended value is on).
   function renderOff(off) {
     var box = document.getElementById('upd-off');
@@ -169,8 +181,13 @@
     post(r.action.post, r.action.body).then(function (d) {
       out.className = 'small mt-1 ' + (d.success ? 'text-success' : 'text-danger');
       out.textContent = d.message || (d.success ? T('Done.') : T('The update failed.'));
-      if (d.success) setTimeout(load, d.started ? 15000 : 1500);
-      else b.disabled = false;
+      if (!d.success) { b.disabled = false; return; }
+      var said = out.textContent;
+      out.textContent = '';
+      out.appendChild(icon('check-circle-fill'));
+      out.appendChild(document.createTextNode(' ' + said));
+      b.remove();
+      setTimeout(refreshAround, d.started ? 15000 : 1500);
     }).catch(function () { out.className = 'small mt-1 text-danger'; out.textContent = T('The update failed.'); b.disabled = false; });
   }
   function refreshAround() {
@@ -217,8 +234,9 @@
 
   function historyItem(h) {
     var li = el('li', 'py-1 border-bottom');
-    var t = el('span', 'localtime text-secondary', h.at);
-    t.setAttribute('data-utc', h.at);
+    // On the clock of the host the row is about, as the nightly window's times are (the list says so once).
+    var t = el('span', 'text-secondary text-nowrap', h.at_host || h.at);
+    t.setAttribute('data-no-i18n', '');
     li.appendChild(t);
     var skipped = h.action === 'update_skipped';
     li.appendChild(el('span', 'ms-2 badge ' + (skipped ? 'text-bg-secondary' : h.ok ? 'text-bg-success' : 'text-bg-danger'),

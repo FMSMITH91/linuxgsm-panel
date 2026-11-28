@@ -678,6 +678,19 @@ def _upd_answer322(action):
                          "action": "website_update", "target": "shop", "ok": True, "detail": ""}]}
 
 
+def _s9_overview():
+    from unit.part301 import _SITE301, _page301
+    from unit.part12 import P9_ADMIN
+    admin = _page301("website.html", P9_ADMIN, site=_SITE301, can_manage=True, can_files=True, site_admin=True)
+    viewer = _page301("website.html", P9_ADMIN, site=_SITE301, can_manage=True, can_files=True, site_admin=False)
+    note = _re322.compile(r'<div id="ws-update-note"[^>]*>(.*?)</div>', _re322.S)
+    eq("website Overview (its update box): a viewer without Update now is not told what Update does; an administrator "
+       "is, with the cost the server works out for this update (no fixed words about building an image)",
+       ([("Update installs" in m, "ws-update-cost" in m) for m in note.findall(viewer)],
+        [("Update installs" in m, "ws-update-cost" in m, "PHP image" in m) for m in note.findall(admin)]),
+       ([(False, False)], [(True, True, False)]))
+
+
 # ── 10. The site's certificate is warned about once ────────────────────────────────────────────────
 def _pem322(names):
     from datetime import datetime, timedelta, timezone
@@ -734,7 +747,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_proxy_card, _s8_blocked_page):
+for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_proxy_card, _s8_blocked_page, _s9_overview):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():

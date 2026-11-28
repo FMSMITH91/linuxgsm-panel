@@ -31,7 +31,11 @@
           <div id="ws-update-ready" class="fw-semibold" data-no-i18n></div>
           <div id="ws-update-when" data-no-i18n></div>
           <div id="ws-update-off" class="text-warning-emphasis" data-no-i18n hidden></div>
-          <div id="ws-update-note" class="form-text mt-0">Update installs the website again from its new image and restarts it: a few seconds offline (building a PHP image can take a few minutes first). Its files, databases and settings stay.</div>
+          {% if site_admin|default(false) %}
+          <div id="ws-update-note" class="form-text mt-0">Update installs the website again from its new image and restarts it. <span id="ws-update-cost" data-no-i18n></span></div>
+          {% else %}
+          <div id="ws-update-note" class="form-text mt-0">An administrator of this website can update it sooner.</div>
+          {% endif %}
           <a href="{{ url_for('updates_page') }}" class="small"><i class="bi bi-cloud-arrow-down"></i> All updates</a>
         </div>
         <div class="form-text">{% if site.kind == 'static' %}A plain site has no PHP, Database or App tab: it serves its files as they are.{% elif site.kind == 'app' %}No PHP tab: this app runs on Node.js.{% else %}No App tab: that one is for Node.js apps.{% endif %}</div>
