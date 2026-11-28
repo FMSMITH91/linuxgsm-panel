@@ -81,7 +81,7 @@ def _web_guard_tick(app):
 
 
 def _web_page_cache_tick(app):
-    """WordPress sites' page cache state into their files where this process has not written it yet. Never raises.
+    """Write WordPress sites' page cache state into their files where this process has not written it yet. Never raises.
 
     The first pass, 30 seconds after boot, writes every one (routes/websites.page_cache_tick); a failed write is
     tried again 30 minutes later.

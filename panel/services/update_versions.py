@@ -161,7 +161,7 @@ def labelled(installed, available):
 
 
 def game_name(game_type, fallback=""):
-    """LinuxGSM's own name of a game (serverlist.csv's gamename, or a retired game's), else `fallback`, else the type.
+    """Return LinuxGSM's own name of a game (serverlist.csv's gamename, or a retired game's), else `fallback`, else the type.
 
     Reads the cached copy only, so the Updates page asks no outside service anything.
     """
