@@ -728,6 +728,23 @@ def _pem322(names):
     return cert.public_bytes(serialization.Encoding.PEM).decode()
 
 
+def _s10_site_cert(st):
+    site = _site322(st, "p322c")
+    _db322.session.add(_Dom322(website_id=site.id, domain="www.p322c.example.org", verified_at=_utcnow322(),
+                               dns_state="matching"))
+    site.own_cert_pem = _pem322(["p322c.example.org", "*.p322c.example.org"])
+    for d in site.domains:
+        d.cert_mode, d.cert_state = "site", "own"
+    _db322.session.commit()
+    got = _p9_json(_Client322(st.su.id).get("/api/websites/%d" % site.id))
+    doms = (got.get("site") or {}).get("domains") or got.get("domains") or []
+    sc = (got.get("site") or {}).get("site_cert") or got.get("site_cert") or {}
+    eq("site certificate (GET /api/websites/<id>, a self-signed site certificate on two domains): it is said once, on "
+       "the site's certificate line, and no domain row repeats it",
+       (len(doms), [d.get("cert_warning") for d in doms], (sc.get("warning") or "").startswith(
+           "The site's certificate is self-signed")), (2, ["", ""], True))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup322():
     _db322.session.rollback()
@@ -774,7 +791,8 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note, _s9_lgsm, _s9_sites):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note, _s9_lgsm, _s9_sites,
+                        _s10_site_cert):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

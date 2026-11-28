@@ -78,6 +78,11 @@ S_OWN_SOON = "The certificate you gave this domain expires in {days} day(s). Pas
 # Certification Authority for the Application's User Base").
 S_OWN_SELF_SIGNED = ("The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a "
                      "well-known authority, or switch back to automatic (Let's Encrypt).")
+# The site's one certificate is warned about once, on the site's certificate line, never again on each domain on it.
+S_SITE_SELF_SIGNED = ("The site's certificate is self-signed, so visitors' browsers warn. Use one from a well-known "
+                      "authority, or switch back to automatic (Let's Encrypt).")
+S_SITE_EXPIRED = "The site's certificate has expired, so browsers refuse it. Paste a renewed one, or switch back to automatic."
+S_SITE_SOON = "The site's certificate expires in {days} day(s). Paste the renewed one before then."
 S_CERT_MODE = "Choose Automatic (Let's Encrypt) or Your own certificate."
 S_CERT_OWN_SAVED = "Saved: {domain} uses your own certificate."
 S_CERT_AUTO_SAVED = "Saved: {domain} gets its certificate automatically from Let's Encrypt."
@@ -203,8 +208,13 @@ def _own_note(row, now):
 
 
 def cert_note(row, now=None):
-    """The plain warning for the certificate `row` is served, or "" when there is nothing to say."""
-    if row.cert_mode in ("own", "site"):
+    """The plain warning for the certificate `row` is served, or "" when there is nothing to say.
+
+    A domain on the site's certificate has none of its own: the site's certificate line says it once (site_cert_json).
+    """
+    if row.cert_mode == "site":
+        return ""
+    if row.cert_mode == "own":
         return _own_note(row, now)
     if row.cert_state == "staging":
         return S_CERT_STAGING
@@ -366,7 +376,18 @@ def site_cert_json(site):
         return None
     on = sorted(d.domain for d in site.domains if d.cert_mode == "site")
     return dict({k: info[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")},
-                domains=on)
+                domains=on, warning=_site_cert_note(info))
+
+
+def _site_cert_note(info):
+    """The site certificate's warning (self-signed, expired, or tls_own.SOON_DAYS days or fewer left), or ""."""
+    notes = [S_SITE_SELF_SIGNED] if info.get("self_signed") and not info.get("cdn_origin") else []
+    days = info.get("days")
+    if isinstance(days, int) and days < 0:
+        notes.append(S_SITE_EXPIRED)
+    elif isinstance(days, int) and days <= tls_own.SOON_DAYS:
+        notes.append(i18n.Sentence(S_SITE_SOON, days=days))
+    return i18n.tr(i18n.Sentences(*notes)) if notes else ""
 
 
 def _cdn_name(row):
