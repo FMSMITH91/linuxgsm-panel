@@ -423,3 +423,35 @@ check("runner: a selected unsplit run's end gate passes when it imported exactly
       [ok for name, ok, _ in _said_gate325 if "selection's run list" in name] == [True, False]
       and [ok for name, ok, _ in _said_gate325 if "whole-suite gates ran here" in name] == [True, True],
       repr(_said_gate325)[:600])
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. The stall: every part's own copy of tools/i18n_scan.py scanned the whole tree again
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# About twenty parts load the scanner under their own name, and each copy kept its own cache, so each
+# re-scanned the repository: part69, part71 and part72 were ~85 s of CPU locally and most of shard
+# 2/4's silent minutes on CI's 22.04 leg. One process-wide cache now serves every copy whose source
+# and constants are the same; a copy a check changed computes its own.
+def _scan_copy325(name):
+    spec = _ilu325.spec_from_file_location(name, os.path.join(_root, "tools", "i18n_scan.py"))
+    mod = _ilu325.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+with _tf325.TemporaryDirectory() as _td325:
+    os.makedirs(os.path.join(_td325, "panel", "routes"))
+    with open(os.path.join(_td325, "panel", "routes", "r.py"), "w", encoding="utf-8") as _fh325:
+        _fh325.write("from flask import jsonify\n\n\ndef r():\n    return jsonify({'message': 'Saved.'})\n")
+    _sa325, _sb325, _sc325 = (_scan_copy325("i18n_scan_p325" + c) for c in "abc")
+    _sc325._r16c_follow = lambda *a, **k: None          # a copy a check stands a function into
+    _ra325 = _sa325.route_answer_keys(_td325)
+    _store325 = getattr(_sys325.modules.get("_i18n_scan_shared_memo"), "memo", {})
+    _key325 = ("route_answer_keys", os.path.realpath(_td325), getattr(_sa325, "_code_identity", lambda: None)())
+    _held325 = _store325.get(_key325)
+    _rb325 = _sb325.route_answer_keys(_td325)
+    _rc325 = _sc325.route_answer_keys(_td325)
+    _held_c325 = _store325.get(("route_answer_keys", os.path.realpath(_td325), getattr(_sc325, "_code_identity", lambda: 0)()))
+check("i18n_scan: a second copy of the scanner answers a scan of unchanged files from the one process-wide cache "
+      "(the entry the first copy made, untouched), and a copy with a stood-in function computes its own",
+      _held325 is not None and _store325.get(_key325) is _held325 and _rb325 == _ra325
+      and _held_c325 is not None and _held_c325 is not _held325, repr((_held325 is not None, len(_store325))))
