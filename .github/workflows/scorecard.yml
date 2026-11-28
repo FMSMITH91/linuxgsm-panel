@@ -61,7 +61,7 @@ jobs:
         id: pin
         env:
           # renovate: datasource=docker
-          SCORECARD_IMAGE: 'ghcr.io/ossf/scorecard-action:v2.5.0@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627'
+          SCORECARD_IMAGE: 'ghcr.io/ossf/scorecard-action:v2.6.0@sha256:7f092e5a4a363af001cca6cdb04f111e212173ba602336104394e7febc2c6e48'
         run: |
           set -euo pipefail
           ref="${SCORECARD_IMAGE%@*}"; want="${SCORECARD_IMAGE#*@}"
