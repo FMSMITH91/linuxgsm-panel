@@ -4043,13 +4043,18 @@ def web_guard_host(lines, ip, tag):
         try:
             entry = json.loads(line)
             host = str(entry.get("request", {}).get("host") or "")
-            folder = str(entry.get("lgsm_folder") or "")
         except (ValueError, AttributeError):
             continue
         host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
         if re.fullmatch(r"[a-z0-9.-]{1,253}", host.lower()):
-            return host.lower() + (folder if len(folder) <= 64 and re.fullmatch(WEB_GUARD_FOLDER, folder) else "")
+            return host.lower() + web_guard_folder(entry)
     return "-"
+
+
+def web_guard_folder(entry):
+    """The folder a security log line of a site in a folder carries (lgsm_folder, "/forums"), or "" (none, or odd)."""
+    folder = str(entry.get("lgsm_folder") or "")
+    return folder if len(folder) <= 64 and re.fullmatch(WEB_GUARD_FOLDER, folder) else ""
 
 
 def _web_log_tail():

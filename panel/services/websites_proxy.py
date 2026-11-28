@@ -595,10 +595,19 @@ def _folder_block(domain, entries, opts, proxy, mode, blocks):
     return head + _folder_loggers(entries, guard, numbers) + _folder_handles(entries, opts, mode, guard, numbers) + ["}", ""]
 
 
+def _live(sites, secret_of):
+    """[(site, its token in clear)] of the enabled sites that can be served, by id."""
+    out = []
+    for site in sorted(sites, key=lambda s: s.id or 0):
+        token = _token_of(site, secret_of) if site.enabled else ""
+        if token:
+            out.append((site, token))
+    return out
+
+
 def _site_blocks(sites, opts, proxy, mode, secret_of):
     """Every site block: each site's whole domains, then each domain with a site in a folder (one block per domain)."""
-    live = [(s, _token_of(s, secret_of)) for s in sorted(sites, key=lambda s: s.id or 0) if s.enabled]
-    live = [(s, t) for s, t in live if t]
+    live = _live(sites, secret_of)
     served = [(d, s, t) for s, t in live for d in _served(s, mode)]
     shared = sorted({d.domain for d, _s, _t in served if _path(d)})
     lines, blocks = [], {}

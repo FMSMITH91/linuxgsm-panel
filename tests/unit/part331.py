@@ -31,6 +31,7 @@ from panel.core import config as _cfg331
 from panel.core import validation as _val331
 from panel.core.clock import utcnow as _utcnow331
 from panel.db import models as _models331
+from panel.db import website_models as _wm331
 from panel.db.models import (AuditLog as _Audit331, Group as _Group331, RemoteServer as _Remote331, User as _User331,
                              Website as _Site331, WebsiteDomain as _Dom331, WebsiteProxy as _Proxy331, db as _db331)
 from panel.ops.ssh_manager import websites as _sw331
@@ -160,6 +161,25 @@ def _insert331(engine, site_id):
         return "refused"
 
 
+def _migrate331(engine):
+    """Run the start's rebuild twice on `engine` (website_models.db pointed at it): what it found and left."""
+    with engine.connect() as conn:
+        before = _wm331.domain_unique_alone(conn, "website_domain")
+    real = _wm331.db
+    _wm331.db = _NS331(engine=engine)
+    try:
+        _wm331.free_shared_domains()
+        _wm331.free_shared_domains()       # the second start finds nothing to do
+    finally:
+        _wm331.db = real
+    with engine.connect() as conn:
+        after = _wm331.domain_unique_alone(conn, "website_domain")
+    folder, again = _insert331(engine, 2), _insert331(engine, 3)
+    with engine.connect() as conn:
+        rows = conn.exec_driver_sql("SELECT id, domain, path FROM website_domain ORDER BY id").fetchall()
+    return before, after, folder, again, rows
+
+
 def _s1_migration():
     tmp = _tf331.mkdtemp(prefix="p331-")
     engine = _sa331.create_engine("sqlite:///%s" % os.path.join(tmp, "old.db"))
@@ -168,34 +188,21 @@ def _s1_migration():
             conn.exec_driver_sql(_old_table_sql(engine))
             conn.exec_driver_sql("INSERT INTO website_domain (id, website_id, domain, path, is_primary, cert_mode) "
                                  "VALUES (7, 1, 'old.%s', '', 1, 'acme')" % _DOM331)
-        with engine.connect() as conn:
-            before = _models331.domain_unique_alone(conn, "website_domain")
-        real = _models331.db
-        _models331.db = _NS331(engine=engine)
-        try:
-            _models331._free_shared_domains()
-            _models331._free_shared_domains()       # the second start finds nothing to do
-        finally:
-            _models331.db = real
-        with engine.connect() as conn:
-            after = _models331.domain_unique_alone(conn, "website_domain")
-        folder, again = _insert331(engine, 2), _insert331(engine, 3)
-        with engine.connect() as conn:
-            rows = conn.exec_driver_sql("SELECT id, domain, path FROM website_domain ORDER BY id").fetchall()
+        before, after, folder, again, rows = _migrate331(engine)
     finally:
         engine.dispose()
         for name in os.listdir(tmp):
             os.unlink(os.path.join(tmp, name))
         os.rmdir(tmp)
-    eq("migration (_free_shared_domains on a database made before folders): the one-site-per-domain UNIQUE is gone, "
+    eq("migration (free_shared_domains on a database made before folders): the one-site-per-domain UNIQUE is gone, "
        "the row keeps its id, a folder of the same domain is stored, the same address twice is still refused",
        (before, after, folder, [tuple(r) for r in rows], again),
        (True, False, "stored", [(7, "old." + _DOM331, ""), (8, "old." + _DOM331, "/forums")], "refused"))
     fn = next(n for n in _ast331.walk(_ast331.parse(open(_models331.__file__).read()))
               if isinstance(n, _ast331.FunctionDef) and n.name == "_run_light_migrations")
     calls = {c.func.id for c in _ast331.walk(fn) if isinstance(c, _ast331.Call) and isinstance(c.func, _ast331.Name)}
-    check("migration: every start runs it (_run_light_migrations calls _free_shared_domains)",
-          "_free_shared_domains" in calls, sorted(calls))
+    check("migration: every start runs it (_run_light_migrations calls free_shared_domains)",
+          "free_shared_domains" in calls, sorted(calls))
 
 
 # ── 2. Who may add which address ─────────────────────────────────────────────────────────────────

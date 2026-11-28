@@ -69,13 +69,28 @@ def _manageable(user, site_ids, perm_of):
 
 def _domain_refusal(user, site, domain, path, held, perm_of):
     """The refusal from the other sites holding `domain` (`held`, its rows), or None."""
-    others = [r for r in held if r.website_id != site.id]
-    if (path or others) and not _manageable(user, sorted({r.website_id for r in held}), perm_of):
-        # A folder needs a domain the user's sites hold; a root needs the folders' sites to be the user's too. Asked
-        # first, so a domain the user holds nowhere is answered alike wherever it is used.
+    return (_holder_refusal(user, site, path, held, perm_of) or _host_refusal(site, held)
+            or _overlap_refusal(domain, path, held))
+
+
+def _holder_refusal(user, site, path, held, perm_of):
+    """A folder needs a domain the user's sites hold; a root needs the folders' sites to be the user's too.
+
+    Asked first, so a domain the user holds nowhere is answered alike wherever it is used.
+    """
+    needed = bool(path) or any(r.website_id != site.id for r in held)
+    if needed and not _manageable(user, sorted({r.website_id for r in held}), perm_of):
         return 409, S_NOT_YOURS if path else S_DOMAIN_TAKEN
+    return None
+
+
+def _host_refusal(site, held):
     if any(r.website is not None and r.website.remote_id != site.remote_id for r in held):
         return 409, S_OTHER_HOST
+    return None
+
+
+def _overlap_refusal(domain, path, held):
     for r in held:
         if folders_overlap(r.path, path):
             return 409, i18n.Sentence(S_OVERLAP, domain=domain, folder=r.path)
