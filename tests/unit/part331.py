@@ -251,8 +251,8 @@ def _s2_tenants(host, root):
     owner = _user331("p331-owner", [mine, root])
     lone = _site331(host, "p331lone", address="lone.%s/docs" % _DOM331)
     with _p9.test_request_context():
-        offered = _wf331.host_domains(tenant, mine, lambda sid: _auth331.MANAGE_WEBSITE)
-        offered_owner = _wf331.host_domains(owner, mine, lambda sid: _auth331.MANAGE_WEBSITE)
+        offered = _wf331.host_domains(tenant, mine)
+        offered_owner = _wf331.host_domains(owner, mine)
     eq("the folder form's domains: only those held by sites the viewer manages on the host",
        (offered, _DOM331 in offered_owner, "lone." + _DOM331 in offered_owner), ([], True, False))
     eq("folder (refused to someone who manages no site holding the domain; a domain used nowhere, and a folder address "

@@ -261,7 +261,7 @@ def domain_refusal(site, text, folder=None):
     own = website_domain(str(load_config().get("site_domain") or "").split(":", 1)[0])
     if own and clean == own:
         return None, (409, S_PANEL)
-    refused = _wf.refusal(current_user, site, clean, path, _w.manage_perm)
+    refused = _wf.refusal(current_user, site, clean, path)
     if refused:
         return None, refused
     quota = _wa.domain_quota_refusal(site)

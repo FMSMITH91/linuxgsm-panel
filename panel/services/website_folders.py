@@ -58,28 +58,34 @@ def shared_note(row):
     return i18n.tr(SHARED_NOTE, domain=row.domain, sub="%s.%s" % (label, row.domain))
 
 
-def _manageable(user, site_ids, perm_of):
-    """Whether `user` may manage any of the sites `site_ids` (site_for's rule, one site at a time)."""
+def _managed(user, site_ids):
+    """The ids among `site_ids` that `user` may manage, in two queries however many there are.
+
+    site_for's rule for either permission routes.websites.manage_perm names: MANAGE_WEBSITES to an administrator of
+    the site, else MANAGE_WEBSITE.
+    """
+    from panel.security.auth import MANAGE_WEBSITE, MANAGE_WEBSITES
     from panel.services import websites_access as _wa
-    for sid in site_ids:
-        if _wa.visible_sites(user, perm_of(sid)).filter(Website.id == sid).first() is not None:
-            return True
-    return False
+    ids = sorted(set(site_ids))
+    got = set()
+    for perm in (MANAGE_WEBSITES, MANAGE_WEBSITE) if ids else ():
+        got |= {sid for (sid,) in _wa.visible_sites(user, perm).filter(Website.id.in_(ids)).with_entities(Website.id)}
+    return got
 
 
-def _domain_refusal(user, site, domain, path, held, perm_of):
+def _domain_refusal(user, site, domain, path, held):
     """The refusal from the other sites holding `domain` (`held`, its rows), or None."""
-    return (_holder_refusal(user, site, path, held, perm_of) or _host_refusal(site, held)
+    return (_holder_refusal(user, site, path, held) or _host_refusal(site, held)
             or _overlap_refusal(domain, path, held))
 
 
-def _holder_refusal(user, site, path, held, perm_of):
+def _holder_refusal(user, site, path, held):
     """A folder needs a domain the user's sites hold; a root needs the folders' sites to be the user's too.
 
     Asked first, so a domain the user holds nowhere is answered alike wherever it is used.
     """
     needed = bool(path) or any(r.website_id != site.id for r in held)
-    if needed and not _manageable(user, sorted({r.website_id for r in held}), perm_of):
+    if needed and not _managed(user, [r.website_id for r in held]):
         return 409, S_NOT_YOURS if path else S_DOMAIN_TAKEN
     return None
 
@@ -107,21 +113,21 @@ def _site_refusal(site, path):
     return None
 
 
-def refusal(user, site, domain, path, perm_of):
+def refusal(user, site, domain, path):
     """(status, sentence) refusing address (`domain`, `path`) on `site` for `user`, or None when it may be added.
 
-    `perm_of(site id)` is the permission that manages a site (routes.websites.manage_perm). The domain's own shape,
-    the panel's name and the site's quota are the caller's checks (websites_domains.domain_refusal).
+    The domain's own shape, the panel's name and the site's quota are the caller's checks
+    (websites_domains.domain_refusal).
     """
     held = WebsiteDomain.query.filter_by(domain=domain).all()
-    refused = _holder_refusal(user, site, path, held, perm_of) if path else None
+    refused = _holder_refusal(user, site, path, held) if path else None
     if refused:
         return refused      # before "taken": a folder address on a domain the user holds nowhere says nothing more
     if any((r.path or "") == path for r in held):
         return 409, S_TAKEN if path else S_DOMAIN_TAKEN
     if path == "" and not held:
         return _site_refusal(site, path)
-    return _domain_refusal(user, site, domain, path, held, perm_of) or _site_refusal(site, path)
+    return _domain_refusal(user, site, domain, path, held) or _site_refusal(site, path)
 
 
 def moves(site, path):
@@ -129,12 +135,13 @@ def moves(site, path):
     return bool(path) and not site.domains and site.state != "creating" and not site.app_recipe
 
 
-def host_domains(user, site, perm_of):
-    """The domains a folder can go on for `site`: those held by sites `user` manages on the same host, sorted."""
+def host_domains(user, site):
+    """The domains a folder can go on for `site`: those held by sites `user` manages on the same host, sorted.
+
+    Three queries whatever the number of sites (the page's query budget).
+    """
     rows = (WebsiteDomain.query.join(Website, WebsiteDomain.website_id == Website.id)
-            .filter(Website.remote_id == site.remote_id).all())
-    mine = {}
-    for r in rows:
-        if r.website_id not in mine:
-            mine[r.website_id] = _manageable(user, [r.website_id], perm_of)
-    return sorted({r.domain for r in rows if mine[r.website_id]})
+            .filter(Website.remote_id == site.remote_id).with_entities(WebsiteDomain.domain, WebsiteDomain.website_id)
+            .all())
+    mine = _managed(user, [sid for _d, sid in rows])
+    return sorted({d for d, sid in rows if sid in mine})
