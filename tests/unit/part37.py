@@ -280,6 +280,7 @@ _SOCK_REVIEWED37 = {
     ("panel/services/sftp_server.py", "main", "socket.socket"),                # the listener's inherited fd
     ("tools/panel-helper", "_sss_sudo_answers", "socket.socket"),              # SSSD's local unix socket
     ("tools/panel-helper", "_web_admin_purge", "socket.socket"),               # the web proxy's admin unix socket
+    ("tools/panel-helper", "_web_admin_load", "socket.socket"),                # the same socket: a reload's /load
 }
 
 

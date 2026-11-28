@@ -157,6 +157,10 @@ function El(id){ this.id = id; this.checked = true; this.value = ''; this.attrs 
 }
 El.prototype.getAttribute = function(k){ return k in this.attrs ? this.attrs[k] : null; };
 El.prototype.addEventListener = function(){};
+El.prototype.hasAttribute = function(k){ return k in this.attrs; };
+// The Outside services card: its switches are the ones marked `sw` (input[role="switch"] inside it).
+El.prototype.querySelectorAll = function(sel){
+  return sel.indexOf('role="switch"') >= 0 ? Object.values(els).filter(e => e.attrs.sw) : []; };
 const els = {}, winL = {};
 function mk(id){ return els[id] = new El(id); }
 global.window = global; window.addEventListener = (tp, f) => { (winL[tp] = winL[tp] || []).push(f); };
@@ -172,7 +176,9 @@ def _notes265():
     """Settings and Schedules notes: a field and switches already holding a restored value at load."""
     prog = _NOTE_DOM265 + r"""
 const idle = mk('s-idle'); idle.value = '45'; idle.attrs['data-owasp-max'] = '30'; mk('s-idle-note');
-const upd = mk('s-upd'); upd.checked = false; upd.attrs.off = 1; upd.attrs['data-confirm-off'] = 'x'; mk('s-upd-owasp');
+mk('sec-outside');
+const upd = mk('s-upd'); upd.checked = false; upd.attrs.off = 1; upd.attrs.sw = 1; upd.attrs['data-confirm-off'] = 'x';
+mk('s-upd-owasp');
 const os_ = mk('sch-os'); os_.checked = false; mk('sch-os-owasp');
 """ + _js249("settings.js") + "\n" + _js249("schedules.js") + r"""
 const atLoad = [hidden('s-idle-note'), hidden('s-upd-owasp'), hidden('sch-os-owasp')];
