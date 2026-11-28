@@ -507,7 +507,9 @@ Off by default, for visitors' privacy. When an administrator turns them on for a
 addresses are shortened before they are kept, and they are kept for the days set in Security settings.
 The site's own error log is always readable on its Overview tab.
 
-The Overview shows what the site runs (the image of its container) and what it uses: memory, disk and CPU,
+The Overview shows what the site runs, as you know it: "WordPress 7.1.5 · PHP 8.4", "PHP 8.3" or "Node.js 22", each
+product with its own version (the container's image name and id are only the line's tooltip), and what it uses:
+memory, disk and CPU,
 read from the host when the page is opened. A figure that cannot be read says so and why (the site is not
 running, the host did not answer, or Podman's own words), never an empty bar. On a host that does not let
 a site's account limit its own containers, it also says the CPU limit is set on the whole account.

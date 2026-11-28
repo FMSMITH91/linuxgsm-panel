@@ -1,4 +1,6 @@
-{# Overview: what runs, its software and what it uses (js/website_site.js renderOverview). #}
+{# Overview: what runs, its software and what it uses (js/website_site.js renderOverview). Software names what a
+   person knows ("WordPress 7.1.5 · PHP 8.4", from routes/websites_view.software_line); the image it runs from is
+   only the line's tooltip. A tab a site does not have is simply not there: nothing here talks about it. #}
 <section data-ws-pane="overview">
   {# Offline: the one button that puts it online (an administrator of the site), or who can. #}
   <div id="ws-offline" class="alert alert-warning py-2 px-2 small mb-2" hidden>
@@ -18,8 +20,7 @@
       <div class="card-body py-2">
         <dl class="ws-kv mb-2">
           <dt>Kind</dt><dd id="ws-ov-kind">—</dd>
-          <dt>Software</dt><dd id="ws-ov-image" data-no-i18n>—</dd>
-          <dt id="ws-ov-version-label">Version</dt><dd id="ws-ov-version" data-no-i18n>—</dd>
+          <dt>Software</dt><dd id="ws-ov-software" data-no-i18n>—</dd>
           <dt>Last backup</dt><dd id="ws-ov-backup">—</dd>
         </dl>
         <div class="d-flex flex-wrap gap-2">
@@ -38,7 +39,6 @@
           {% endif %}
           <a href="{{ url_for('updates_page') }}" class="small"><i class="bi bi-cloud-arrow-down"></i> All updates</a>
         </div>
-        <div class="form-text">{% if site.kind == 'static' %}A plain site has no PHP, Database or App tab: it serves its files as they are.{% elif site.kind == 'app' %}No PHP tab: this app runs on Node.js.{% else %}No App tab: that one is for Node.js apps.{% endif %}</div>
       </div>
     </div>
     <div class="card">

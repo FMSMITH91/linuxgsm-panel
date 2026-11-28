@@ -1,7 +1,7 @@
 // One website's page (templates/website.html and its _website_*.html panels). Reads
 // GET /api/websites/<id> (one probe, cached briefly by the server):
 //   {success, site: {id, name, kind, state, state_reason, enabled, open_url, image: {name, version,
-//      update_available}, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
+//      update_available}, software, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
 //      cpu_pct}, limits: {mem_mb, cpu_milli, pids, disk_mb, max_body_mb, backup_keep}, access_log,
 //      full_egress, customer_note}, install: {state, steps, error, site_url, admin_url},
 //    logs: [last lines when failed], domains: [{id, domain, is_primary, dns_state, cert_state,
@@ -142,9 +142,10 @@
   function renderOverview(s) {
     setText('ws-ov-kind', WS.kindLabel(s.kind));
     var img = s.image || {}, u = s.usage || {}, why = u.unread || {};
-    setText('ws-ov-image', img.name ? [img.name, img.version].filter(Boolean).join(' ') : unread(why.image));
-    var ver = s.app_version || s.php_version || s.runtime_version;
-    setText('ws-ov-version', ver);
+    // What runs, in a person's words (the server's software line); the image it runs from only as the tooltip.
+    setText('ws-ov-software', s.software);
+    var sw = WS.el('ws-ov-software');
+    if (sw) sw.title = img.name ? [img.name, img.version].filter(Boolean).join(' ') : '';
     setText('ws-ov-backup', backupText(s.last_backup));
     renderUpdate(img);
     renderUsage(u, s.limits || {}, why);

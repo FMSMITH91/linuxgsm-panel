@@ -9,6 +9,8 @@
    and the page draws its defaults when storage is refused.
 3. A setting that does not apply is shown greyed with the reason, never removed: a site without PHP keeps OPcache and
    the object cache on its Performance tab, disabled, reading off, and never sent on Save.
+4. A website's Overview names its software as a person knows it ("WordPress 7.1.5 · PHP 8.4"), the image only as the
+   line's tooltip, and says nothing about tabs the site does not have.
 5. The Blocked visitors label says on or off and how many settings, so a closed one still says what is inside.
 
 HOW IT RUNS. part12's app and its database (tripwire armed): pages through their routes with the host's probe stood in;
@@ -24,12 +26,13 @@ import tempfile as _tf329
 from flask import g as _g329
 
 from unit.part01 import _root, check, eq, skip
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_restore_all
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from unit.part47 import _cut47
 from unit.part221 import _node221
 from unit.part301 import _COMMON301, _node301, _page301
 from panel.core import config as _cfg329
 from panel.db.models import RemoteServer as _Remote329, Website as _Site329, db as _db329
+from panel.ops.ssh_manager import websites as _sw329
 from panel.routes import websites as _w329
 
 _ROWS329 = {"sites": [], "remotes": []}
@@ -335,6 +338,44 @@ def _s3_perf_save():
 
 
 # ── 4. the Overview's software line ──────────────────────────────────────────────────────────────────
+def _s4_software(st):
+    _p9_patch(_sw329, "site_probe", lambda remote, site: (False, "The website's host did not answer."))
+    _p9_patch(_sw329, "site_logs", lambda remote, site: (True, ""))
+    cases = (("p329-wp", "wordpress", {"app_version": "7.1.5", "php_version": "8.4",
+                                        "image_digest": "localhost/lgsm-site-wordpress@sha256:" + "7438834a" * 8},
+              "WordPress 7.1.5 · PHP 8.4"),
+             ("p329-plain", "php", {"php_version": "8.3"}, "PHP 8.3"),
+             ("p329-node", "app", {"runtime": "node", "runtime_version": "22"}, "Node.js 22"),
+             ("p329-files", "static", {}, "Its files, served as they are"))
+    got = []
+    for name, kind, kw, _want in cases:
+        site = _site329(st, name, kind, **kw)
+        _w329._STATUS.clear()
+        got.append(((_get329("/api/websites/%d" % site.id).get_json(silent=True) or {}).get("site") or {}).get("software"))
+    eq("Overview (GET /api/websites/<id>): the software line names each product with its own version, never the "
+       "image's name and hash", got, [c[3] for c in cases])
+    page = _get329("/websites/%d" % _ROWS329["sites"][-4]).get_data(as_text=True)
+    eq("Overview: the page says nothing about tabs the site does not have, and has no unlabelled Version line",
+       ("No App tab" in page, "No PHP tab" in page, "has no PHP, Database or App tab" in page, 'id="ws-ov-version"' in page,
+        'id="ws-ov-software"' in page), (False, False, False, False, True))
+
+
+_OVERVIEW329 = r"""
+  for (let i = 0; i < 4; i++) await tick();
+  return {text: $('ws-ov-software').textContent, title: $('ws-ov-software').title};
+"""
+
+
+def _s4_overview_js():
+    from unit.part301 import _site_ad301
+    answer = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "running", "enabled": True,
+                                        "software": "WordPress 7.1.5 · PHP 8.4",
+                                        "image": {"name": "lgsm-site-wordpress", "version": "74388341a5ca"},
+                                        "usage": {}, "limits": {}}, "domains": []}
+    got = _node301(_site_ad301, _COMMON301 + ["website_site.js"], _OVERVIEW329, routes={"/api/websites/7": answer})
+    eq("Overview (website_site.js): Software reads what a person knows; the image's name and id are only its tooltip",
+       (got.get("error"), got.get("text"), got.get("title")),
+       (None, "WordPress 7.1.5 · PHP 8.4", "lgsm-site-wordpress 74388341a5ca"))
 
 
 # ── 5. links to the host-wide settings; a closed fold's label ────────────────────────────────────────
@@ -401,8 +442,8 @@ with _p9.app_context():
         _db329.session.commit()
         _ROWS329["remotes"].append(_r329.id)
         _st329 = {"remote": _r329.id}
-        _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s3_perf_save, _s5_guard_label)
-        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages)]
+        _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s3_perf_save, _s4_overview_js, _s5_guard_label)
+        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages, _s4_software)]
                                   + [(s, ()) for s in _plain329]):
             _err329 = _ran329(_sec329, *_args329)
             check("part329: %s ran to the end" % _sec329.__name__, not _err329, _err329)
