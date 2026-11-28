@@ -15,7 +15,6 @@
 HOW IT RUNS. Through part12's app (its tripwire armed): routes by the test client with the host calls stubbed, the
 render and the recipes by the functions the routes and the install job call, the helper loaded from its file.
 """
-import ast as _ast331
 import json as _json331
 import os
 import tempfile as _tf331
@@ -162,16 +161,16 @@ def _insert331(engine, site_id):
 
 
 def _migrate331(engine):
-    """Run the start's rebuild twice on `engine` (website_models.db pointed at it): what it found and left."""
+    """Run the start's table rebuild twice on `engine` (models.db pointed at it): what it found and left."""
     with engine.connect() as conn:
         before = _wm331.domain_unique_alone(conn, "website_domain")
-    real = _wm331.db
-    _wm331.db = _NS331(engine=engine)
+    real = _models331.db
+    _models331.db = _NS331(engine=engine, metadata=real.metadata)
     try:
-        _wm331.free_shared_domains()
-        _wm331.free_shared_domains()       # the second start finds nothing to do
+        _models331._give_keyed_tables_autoincrement()
+        _models331._give_keyed_tables_autoincrement()       # the second start finds nothing to do
     finally:
-        _wm331.db = real
+        _models331.db = real
     with engine.connect() as conn:
         after = _wm331.domain_unique_alone(conn, "website_domain")
     folder, again = _insert331(engine, 2), _insert331(engine, 3)
@@ -194,15 +193,10 @@ def _s1_migration():
         for name in os.listdir(tmp):
             os.unlink(os.path.join(tmp, name))
         os.rmdir(tmp)
-    eq("migration (free_shared_domains on a database made before folders): the one-site-per-domain UNIQUE is gone, "
+    eq("migration (each start's table rebuild, on a database made before folders): the one-site-per-domain UNIQUE is gone, "
        "the row keeps its id, a folder of the same domain is stored, the same address twice is still refused",
        (before, after, folder, [tuple(r) for r in rows], again),
        (True, False, "stored", [(7, "old." + _DOM331, ""), (8, "old." + _DOM331, "/forums")], "refused"))
-    fn = next(n for n in _ast331.walk(_ast331.parse(open(_models331.__file__).read()))
-              if isinstance(n, _ast331.FunctionDef) and n.name == "_run_light_migrations")
-    calls = {c.func.id for c in _ast331.walk(fn) if isinstance(c, _ast331.Call) and isinstance(c.func, _ast331.Name)}
-    check("migration: every start runs it (_run_light_migrations calls free_shared_domains)",
-          "free_shared_domains" in calls, sorted(calls))
 
 
 # ── 2. Who may add which address ─────────────────────────────────────────────────────────────────

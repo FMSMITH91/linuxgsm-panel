@@ -230,6 +230,21 @@ class Website(db.Model):
         return dom.path if dom is not None and dom.path else ""
 
 
+def domain_unique_alone(conn, name):
+    """Whether table `name` still has a UNIQUE index on its `domain` column alone (one site per domain, before folders).
+
+    WebsiteDomain's `rebuild_when`: panel/db/id_sequence.py rebuilds the table from the model ONCE while it does
+    (SQLite cannot drop a constraint), so sites can share a domain in folders.
+    """
+    for row in conn.exec_driver_sql("PRAGMA index_list(%s)" % name).fetchall():
+        if not row[2]:
+            continue
+        cols = [r[2] for r in conn.exec_driver_sql("PRAGMA index_info(\"%s\")" % row[1].replace('"', '""')).fetchall()]
+        if cols == ["domain"]:
+            return True
+    return False
+
+
 class WebsiteDomain(db.Model):
     """One address a website serves: a domain, and the folder of it the site lives in ("" for the whole domain).
 
@@ -249,7 +264,7 @@ class WebsiteDomain(db.Model):
 
     __tablename__ = "website_domain"
     __table_args__ = (db.UniqueConstraint("domain", "path", name="uq_website_domain_address"),
-                      {"sqlite_autoincrement": True})
+                      {"sqlite_autoincrement": True, "info": {"rebuild_when": domain_unique_alone}})
     id = db.Column(db.Integer, primary_key=True)
     website_id = db.Column(db.Integer, db.ForeignKey("website.id", ondelete="CASCADE"),
                            nullable=False, index=True)
@@ -411,32 +426,3 @@ def site_certs_from_domains():
             if d.own_cert_pem == pem:
                 d.cert_mode, d.own_cert_pem, d.own_key_secret = "site", "", ""
 
-
-def domain_unique_alone(conn, name):
-    """Whether table `name` still has a UNIQUE index on its `domain` column alone (one site per domain, before folders)."""
-    for row in conn.exec_driver_sql("PRAGMA index_list(%s)" % name).fetchall():
-        if not row[2]:
-            continue
-        cols = [r[2] for r in conn.exec_driver_sql("PRAGMA index_info(\"%s\")" % row[1].replace('"', '""')).fetchall()]
-        if cols == ["domain"]:
-            return True
-    return False
-
-
-def free_shared_domains():
-    """Rebuild website_domain ONCE without the UNIQUE on `domain` alone, so sites can share a domain in folders.
-
-    Run by models._run_light_migrations at every start (a no-op once done). SQLite cannot drop a constraint, so the
-    table is copied and created again from the model, whose UNIQUE is on (domain, path) (panel/db/id_sequence.py:
-    one transaction, the rows and their ids kept). After the column ALTERs, so `path` is there to copy. A rebuild
-    that fails leaves the table as it was: the panel runs on, a folder on a domain another site holds is refused by
-    the old constraint, and the next start tries again.
-    """
-    import logging
-    from panel.db.id_sequence import rebuild_one
-    log = logging.getLogger("panel.models")
-    try:
-        if rebuild_one(db.engine, WebsiteDomain.__table__, needs=domain_unique_alone):
-            log.info("website_domain rebuilt: a domain may now be shared by sites in folders")
-    except Exception:
-        log.warning("could not rebuild website_domain for folders; the next start tries again", exc_info=True)

@@ -83,12 +83,19 @@ def _count(conn, table):
     return conn.execute(sa.select(sa.func.count()).select_from(table)).scalar()
 
 
-def _rebuild_in(conn, table, refs, needs=None):
-    """Rebuild `table` on `conn`, inside the caller's transaction. False when it is left alone.
+def needs_rebuild(conn, table):
+    """Whether `table` is rebuilt: it lacks AUTOINCREMENT, or its model's `rebuild_when(conn, name)` says so.
 
-    `needs(conn, name)` says whether the table still needs it (lacks_autoincrement by default).
+    `rebuild_when` (the table's info) names a change ALTER TABLE cannot make that the copy below makes, such as a
+    constraint the model no longer has (WebsiteDomain: the UNIQUE on domain alone, before folders).
     """
-    if not (needs or lacks_autoincrement)(conn, table.name):
+    when = table.info.get("rebuild_when")
+    return lacks_autoincrement(conn, table.name) or bool(when is not None and when(conn, table.name))
+
+
+def _rebuild_in(conn, table, refs):
+    """Rebuild `table` on `conn`, inside the caller's transaction. False when it is left alone."""
+    if not needs_rebuild(conn, table):
         return False
     cols = _copy_columns(conn, table)
     if cols is None:
@@ -114,17 +121,14 @@ def _rebuild_in(conn, table, refs, needs=None):
     return True
 
 
-def rebuild_one(engine, table, refs=(), needs=None):
-    """Rebuild `table` from its model when `needs` says so (no AUTOINCREMENT by default), in one transaction.
-
-    True when it was rebuilt. The same copy serves any change ALTER TABLE cannot make, a constraint removed among them.
-    """
+def rebuild_one(engine, table, refs=()):
+    """Rebuild `table` from its model when needs_rebuild says so, in one transaction. True when it was rebuilt."""
     with engine.connect() as conn:
         # One transaction for the whole copy, so a failure anywhere leaves the table as it was.
         # pysqlite would open its own only before the first INSERT, after the CREATE of the copy.
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         try:
-            done = _rebuild_in(conn, table, refs, needs)
+            done = _rebuild_in(conn, table, refs)
         except Exception:
             conn.rollback()
             raise
@@ -150,8 +154,7 @@ def rebuild_for_autoincrement(engine, metadata, tables, extra_refs=None):
         try:
             if rebuild_one(engine, table, refs):
                 rebuilt.append(table.name)
-                _log.info("%s rebuilt with AUTOINCREMENT: its ids are never handed out again",
-                          table.name)
+                _log.info("%s rebuilt from its model: its ids are never handed out again", table.name)
         except Exception:
             _log.warning("could not rebuild %s with AUTOINCREMENT; it keeps plain rowids until "
                          "the next start", table.name, exc_info=True)
