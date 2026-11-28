@@ -33,17 +33,20 @@
 
 // Outside services: a switch with data-confirm-off (the update check, the breached-password check)
 // asks before it goes off. It is put back on at once and turned off only on Confirm, so Cancel, the
-// Escape key or a click outside the dialog all leave it on. Turning a switch on never asks. Its
-// "outside OWASP's recommendation" note (#s-<name>-owasp) follows the switch: a note, never a refusal.
+// Escape key or a click outside the dialog all leave it on. Turning a switch on never asks. Every
+// switch's "outside OWASP's recommendation" note (#s-<name>-owasp) follows it as it is flipped, before
+// Save, those that do not ask included: a note, never a refusal.
 // Also on load and on pageshow: a switch the browser restores to its unsaved state fires no change.
 (function(){
-  document.querySelectorAll('#sec-outside input[data-confirm-off]').forEach(function(box){
+  var sec = document.getElementById('sec-outside');
+  if (!sec) return;
+  sec.querySelectorAll('input[role="switch"]').forEach(function(box){
     var note = document.getElementById(box.id + '-owasp');
     function sync(){ if (note) note.classList.toggle('d-none', box.checked); }
     window.addEventListener('pageshow', sync);
     sync();
     box.addEventListener('change', function(){
-      if (box.checked || !window.confirmDialog) { sync(); return; }
+      if (box.checked || !window.confirmDialog || !box.hasAttribute('data-confirm-off')) { sync(); return; }
       box.checked = true;
       window.confirmDialog({title: t('Outside services'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
         confirmLabel: t('Turn this service off'), bodyText: box.getAttribute('data-confirm-off'),

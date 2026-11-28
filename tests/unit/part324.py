@@ -575,6 +575,27 @@ def _s6_badge():
        ("Queued" in (got.get("hist") or ""), "Done" in (got.get("hist") or ""), got.get("error")), (True, False, None))
 
 
+def _s7_outside(su):
+    page = _client324(su.id).get("/settings").data.decode("utf-8", "replace")
+    got = _node324(page, ["settings.js"], r"""
+  const box = $('s-outside_game_update_check'), note = $('s-outside_game_update_check-owasp');
+  const asks = $('s-outside_update_check');
+  if (!box || !note || !asks) return {missing: [!!box, !!note, !!asks]};
+  const before = note.className.indexOf('d-none') >= 0;
+  box.checked = false;
+  box._on.change();
+  const after = note.className.indexOf('d-none') >= 0;
+  asks.checked = false;
+  asks._on.change();
+  return {before: before, after: after, asked: dialogs.length, stillOn: asks.checked};
+""", {})
+    eq("Settings (Outside services, js/settings.js): a switch turned off shows \"Off: outside OWASP's recommendation.\" "
+       "at once, before Save, as the switches that ask first do",
+       (got.get("before"), got.get("after"), got.get("missing"), got.get("error")), (True, False, None, None))
+    eq("Settings (Outside services, control): a switch that asks before it goes off still asks, and stays on until "
+       "Confirm", (got.get("asked"), got.get("stillOn")), (1, True))
+
+
 # ── 8. An apply loads through the admin socket when both sides have it ────────────────────────────
 def _admin_server324(path, got):
     """A unix socket at `path` answering one request 200, its bytes kept in got["req"]."""
@@ -708,6 +729,7 @@ _GAME324 = (
     _s6_window_words,
 )
 _USER324 = (
+    _s7_outside,
 )
 for _sec324 in _PAGES324:
     check("part324: %s ran to the end" % _sec324.__name__, _ran324(_sec324), _ran324.last)
