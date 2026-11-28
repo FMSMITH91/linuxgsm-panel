@@ -1925,14 +1925,12 @@ _LIGHT_MIGRATIONS = {
     # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
     # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
     # rather than withholding it from a row whose cause nobody can name any more.
-    ("game_server", "install_error"):
-        "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+    ("game_server", "install_error"): "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
     # NULL on upgrade: a reason recorded before this column shows as the English it was written in.
     ("game_server", "install_error_i18n"): "ALTER TABLE game_server ADD COLUMN install_error_i18n TEXT",
     ("game_server", "install_retryable"):
         "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
-    ("game_server", "content_games"):
-        "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    ("game_server", "content_games"): "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
     # NULL on upgrade: no reboot the panel made before this column existed has anything to restore.
     ("game_server", "reboot_restore"): "ALTER TABLE game_server ADD COLUMN reboot_restore TEXT",
     # NULL on upgrade: every existing TeamSpeak 3 server gets the one-time ServerQuery close.

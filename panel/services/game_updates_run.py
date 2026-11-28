@@ -109,6 +109,11 @@ def queue_when_empty(gs, user, on):
     return True, i18n.Sentence(S_QUEUED if on else S_UNQUEUED, name=gs.name)
 
 
+def only_update_queued(gs):
+    """Whether `gs`'s only queued action is its update (a queued stop or restart is settled first)."""
+    return bool(gs.update_pending) and not (gs.restart_pending or gs.stop_pending)
+
+
 def settle_queued(app, gs, decision):
     """Run `gs`'s queued update when the due-actions sweep read it empty or stopped (`decision` not "pending").
 

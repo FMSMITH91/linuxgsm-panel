@@ -1308,8 +1308,8 @@ def _settle_queued_action(app, gs):
                          gs.query_type) if status == "online" else None
     # 'restart' here means "online + empty -> act now"; 'idle' = already stopped.
     decision = mod_restart_decision(status, pc)
-    if gs.update_pending and not (gs.restart_pending or gs.stop_pending):
-        from panel.services import game_updates_run as _gur
+    from panel.services import game_updates_run as _gur
+    if _gur.only_update_queued(gs):
         _gur.settle_queued(app, gs, decision)       # "Update when empty": stopped or empty, it runs now
         return
     if decision == "idle":

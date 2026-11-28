@@ -198,29 +198,40 @@ def _s2_rows(host, su, nobody, gmod):
        "one who may update it does (control)",
        (a_body.get("success"), [k for k in a_rows if k.startswith("game:")],
         "game:%d" % gmod.id in _rows323(upd.id)[0]), (True, [], True))
+    _s2_cron(su, gmod)
+    _s2_switches(su, gmod, mc)
+    return mc
+
+
+def _row323(uid, gs):
+    """The Updates page's row of game server `gs` for user `uid` ({} when it is not listed)."""
+    return _rows323(uid)[0].get("game:%d" % gs.id) or {}
+
+
+def _s2_cron(su, gmod):
     _u323.note_lgsm_cron(gmod.id, [{"command": "cd /home/p323gmod && ./gmodserver update-lgsm", "schedule": "0 5 * * 0"}])
-    only_lgsm = (_rows323(su.id)[0].get("game:%d" % gmod.id) or {}).get("when")
+    only_lgsm = _row323(su.id, gmod).get("when")
     _u323.note_lgsm_cron(gmod.id, [{"command": "/home/p323gmod/gmodserver update > /dev/null 2>&1",
                                     "schedule": "15 5 * * *"}])
     eq("game rows: a server whose crontab runs LinuxGSM's update says that task updates it (an update-lgsm task is "
        "not one)",
-       (only_lgsm, (_rows323(su.id)[0].get("game:%d" % gmod.id) or {}).get("when")),
+       (only_lgsm, _row323(su.id, gmod).get("when")),
        ("By itself tonight at 04:00 (the host's clock), if no players are on.",
         "By itself: its scheduled task runs update (15 5 * * *, the host's clock)."))
     _u323.note_lgsm_cron(gmod.id, [])
+
+
+def _s2_switches(su, gmod, mc):
     on = _client323(su.id).post("/api/updates/auto", json={"ref": "game:%d" % mc.id, "on": True})
     off = _client323(su.id).post("/api/updates/auto", json={"ref": "game:%d" % gmod.id, "on": False})
     bk = _client323(su.id).post("/api/updates/game/%d/backup" % gmod.id, json={"on": True})
-    rows = _rows323(su.id)[0]
+    m, g = _row323(su.id, mc), _row323(su.id, gmod)
     eq("game rows (POST /api/updates/auto, /api/updates/game/<id>/backup): Minecraft switched on and a Steam game "
        "off are both kept against their family's default, off answered with OWASP's note (never refused); Back up "
        "first is kept",
-       (on.status_code, (rows.get("game:%d" % mc.id) or {}).get("auto"), off.status_code,
-        "OWASP" in ((off.get_json() or {}).get("note") or ""), (rows.get("game:%d" % gmod.id) or {}).get("auto"),
-        bk.status_code, (rows.get("game:%d" % gmod.id) or {}).get("backup")),
-       (200, True, 200, True, False, 200, True))
+       (on.status_code, m.get("auto"), off.status_code, "OWASP" in ((off.get_json() or {}).get("note") or ""),
+        g.get("auto"), bk.status_code, g.get("backup")), (200, True, 200, True, False, 200, True))
     _settings323()
-    return mc
 
 
 # ── 3. Update now ─────────────────────────────────────────────────────────────────────────────────

@@ -2196,9 +2196,8 @@ def _hub_leftovers():
             f = f.f_back
         fn = f.f_locals.get("function") if f is not None else None
         code = getattr(f, "f_code", None)
-        return "a greenthread running %s" % (
-            getattr(fn, "__qualname__", None) or getattr(code, "co_qualname", None)
-            or getattr(code, "co_name", "?"))
+        return "a greenthread running %s" % (getattr(fn, "__qualname__", None) or getattr(code, "co_qualname", None)
+                                             or getattr(code, "co_name", "?"))
     left =["%s listener on fd %d, for %s" % (ev, fd, _whose(ls))
             for ev, bucket in hub.listeners.items() for fd, ls in bucket.items() if fd != tpool_fd]
     left += ["%s secondary listener on fd %d, for %s" % (ev, fd, _whose(ls))

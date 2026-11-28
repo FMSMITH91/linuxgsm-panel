@@ -238,11 +238,15 @@ def note_lgsm_cron(gs_id, jobs):
     """
     if not isinstance(jobs, list):
         return
-    found = [j for j in jobs if isinstance(j, dict) and _LGSM_CRON_RE.search(str(j.get("command") or ""))]
-    game = [j for j in jobs if isinstance(j, dict) and _GAME_CRON_RE.search(str(j.get("command") or ""))]
     with _SEEN_LOCK:
-        _LGSM_CRON[gs_id] = {"at": time.time(), "schedule": str(found[0].get("schedule") or "")[:60] if found else "",
-                             "game": str(game[0].get("schedule") or "")[:60] if game else ""}
+        _LGSM_CRON[gs_id] = {"at": time.time(), "schedule": _cron_schedule(jobs, _LGSM_CRON_RE),
+                             "game": _cron_schedule(jobs, _GAME_CRON_RE)}
+
+
+def _cron_schedule(jobs, rx):
+    """The schedule of the first crontab job whose command `rx` finds ("" when none)."""
+    found = [j for j in jobs if isinstance(j, dict) and rx.search(str(j.get("command") or ""))]
+    return str(found[0].get("schedule") or "")[:60] if found else ""
 
 
 def lgsm_cron_seen(gs_id):

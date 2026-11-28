@@ -141,17 +141,21 @@
       when.appendChild(wl);
     }
     wrap.appendChild(when);
-    var ctl = el('div', 'd-flex flex-wrap gap-2 align-items-center mt-1');
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');
+    wrap.appendChild(controls(r, out));
+    if (r.auto_why) wrap.appendChild(line('info-circle', r.auto_why, 'text-secondary'));
+    wrap.appendChild(out);
+    return wrap;
+  }
+  // A row's buttons and switches; each answers in `out`.
+  function controls(r, out) {
+    var ctl = el('div', 'd-flex flex-wrap gap-2 align-items-center mt-1');
     if (r.action) ctl.appendChild(actionButton(r, out));
     if (r.later) ctl.appendChild(laterButton(r, out));
     if (r.auto_editable) ctl.appendChild(autoSwitch(r, out));
     if (r.backup_post && r.auto) ctl.appendChild(backupSwitch(r, out));     // only the nightly window backs up first
-    wrap.appendChild(ctl);
-    if (r.auto_why) wrap.appendChild(line('info-circle', r.auto_why, 'text-secondary'));
-    wrap.appendChild(out);
-    return wrap;
+    return ctl;
   }
   // Update when empty, or no longer wait: the server's own queue (the due-actions sweep runs it once nobody is on).
   function laterButton(r, out) {
