@@ -1,10 +1,14 @@
-"""Part 326 of the unit suite: a lead a host's proof of the Updates and Websites work turned up.
+"""Part 326 of the unit suite: two leads a host's proof of the Updates and Websites work turned up.
 
 1. The nightly window reads a server's crontab itself (as the game account) before it updates the server's game: a
    server whose own scheduled task runs `update` is left to that task even when nothing read the crontab since the
    panel started, and a crontab that could not be read (or whose read is refused) leaves the server alone that night,
    with a History row saying why. The Updates row says when the crontab is not read yet, and opening the page reads
    none.
+2. A panel Start's port check counts only a socket of the protocol the game binds on its port, held by another
+   account: another server's UDP query socket on a Minecraft server's TCP port is no clash, and another account's TCP
+   listener there is refused naming that account. Both reads of the host's sockets (the port scan and the host sample
+   that shares it) carry each socket's protocol.
 
 HOW IT RUNS. Through part12's app (its tripwire armed): the window by updates_auto.tick, the Start by its route over a
 stand-in host that runs the panel's real awk over fixture `ss -e` lines, the cache switch by its route.
@@ -148,6 +152,98 @@ def _s1_row(host, su):
        (read.startswith("By itself"), _ug326.S_CRON_UNREAD in read), (True, False))
 
 
+# ── 2. The Start's port check: the game's protocol, another account ────────────────────────────────
+_SS_RE326 = _re326.compile(r"ss -H -l[nt]{2}ue?(?: '\(([^)]*)\)')? 2>/dev/null")
+_SAMPLE326 = ("cpu  100 0 100 800 0 0 0\nGJA 0\ncpu  110 0 110 880 0 0 0\nGJB 0\nGAMERAM 0 0\nGUP 0\n"
+              "MEM 8000000000 2000000000\nLOAD 0.1 0.2 0.3\nDISK 1000 500\nCORES 2\nUPTIME 999\n")
+_PMC_UDP326 = "udp   UNCONN 0      0                 *:25565            *:*    uid:1202 ino:91 sk:1 <->"
+_PMC_TCP326 = "tcp   LISTEN 0      4096              *:25566            *:*    uid:1202 ino:92 sk:2 <->"
+_OTHER_TCP326 = "tcp   LISTEN 0      4096              *:25565            *:*    uid:1202 ino:93 sk:3 <->"
+_ROOT_TCP326 = "tcp   LISTEN 0      4096              *:25565            *:*    ino:94 sk:4 <->"
+_GMOD_TCP326 = "tcp   LISTEN 0      4096              *:27216            *:*    uid:1202 ino:95 sk:5 <->"
+
+
+def _bash326(script):
+    return _sp326.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,  # nosec B603 B607
+                      check=False).stdout
+
+
+def _host326(ss_lines, passwd, ran):
+    """run_command answering every `ss` read (the scan, the host sample, a server's sample) with its real awk."""
+    uids = {ln.split(":")[0]: ln.split(":")[2] for ln in open(passwd, encoding="ascii").read().split()}
+
+    def _printf(m):
+        ports = set(_re326.findall(r"sport = :(\d+)", m.group(1) or ""))
+        lines = [ln for ln in ss_lines if not ports or ln.split()[4].rsplit(":", 1)[1] in ports]
+        return "printf '%s\\n' " + " ".join(_shlex326.quote(ln) for ln in lines) if lines else "true"
+
+    def _run(server, cmd, timeout=None, sudo=None, **_kw):
+        if "ss -H" not in cmd:
+            return "", "", 0
+        ran.append("sample" if "ps -u" in cmd else "host" if "PORTS" in cmd else "scan")
+        parts = [p for p in cmd.split(" ; ") if "ss -H" in p]
+        script = " ; ".join(_SS_RE326.sub(_printf, p) for p in parts).replace('"/etc/passwd"', '"%s"' % passwd)
+        for name, uid in uids.items():
+            script = script.replace("$(id -u %s 2>/dev/null)" % name, uid)
+        out = _bash326(script)
+        return (_SAMPLE326 + out if "ps -u" in cmd else out), "", 0
+    return _run
+
+
+def _fresh326(host):
+    _core326._live_metrics_cache.clear()
+    _core326._host_metrics_cache.clear()
+    _ps326._port_scan_cache.pop(host.id, None)
+
+
+def _start326(host, su, gs, lines, passwd, started, sample_first=False):
+    """POST start (no force) over a host whose sockets are `lines`: (success, port_in_use, message, started, reads)."""
+    ran = []
+    _p9_patch_sm("run_command", _host326(lines, passwd, ran))
+    _fresh326(host)
+    if sample_first:            # the dashboard's host sample read the sockets a moment before
+        _core326.host_live_metrics(host)
+    del started[:]
+    body = _p9_json(_client326(su.id).post("/api/server/%d/action" % gs.id, json={"action": "start"}))
+    return body.get("success"), bool(body.get("port_in_use")), body.get("message") or "", list(started), ran
+
+
+def _s2_port(host, su):
+    _p9_quiet_lookups()
+    d = _tf326.mkdtemp(prefix="lgsm-unit-p326-ss-")
+    passwd = os.path.join(d, "passwd")
+    with open(passwd, "w", encoding="ascii") as fh:
+        fh.write("root:x:0:0::/root:/bin/sh\np326mc:x:1201:1201::/home/p326mc:/bin/bash\n"
+                 "p326pmc:x:1202:1202::/home/p326pmc:/bin/bash\np326gm:x:1203:1203::/home/p326gm:/bin/bash\n")
+    mc = _gs326(host, "p326-mc", "mc", "p326mc", 25565)
+    _gs326(host, "p326-pmc", "pmc", "p326pmc", 25566, status="online")
+    gm = _gs326(host, "p326-gm", "gmod", "p326gm", 27216)
+    started = []
+    _p9_patch(_sd326, "_bg_power_action", lambda app, gs, remote, action, actor, origin=None, on_done=None:
+              started.append((gs.id, action)))
+    try:
+        udp = _start326(host, su, mc, [_PMC_UDP326, _PMC_TCP326], passwd, started)
+        shared = _start326(host, su, mc, [_PMC_UDP326, _PMC_TCP326], passwd, started, sample_first=True)
+        tcp = _start326(host, su, mc, [_PMC_UDP326, _PMC_TCP326, _OTHER_TCP326], passwd, started)
+        root = _start326(host, su, mc, [_ROOT_TCP326], passwd, started)
+        gmod = _start326(host, su, gm, [_GMOD_TCP326], passwd, started)
+    finally:
+        _shutil326.rmtree(d, ignore_errors=True)
+        _fresh326(host)
+    eq("port check (POST /api/server/<id>/action start): a stopped Minecraft server beside another account's UDP query "
+       "socket on its TCP port 25565 starts, with no \"Port in use\" question",
+       (udp[0], udp[1], udp[3]), (True, False, [(mc.id, "start")]))
+    eq("port check: the same when the dashboard's host sample read the sockets (the scan it shares carries each "
+       "socket's protocol too)", (shared[:2], shared[3], "scan" in shared[4]),
+       ((True, False), [(mc.id, "start")], False))
+    eq("port check (control: another account's TCP listener on the game's TCP port): still asked, naming the account",
+       (tcp[0], tcp[1], "the 'p326pmc' account" in tcp[2], tcp[3]), (False, True, True, []))
+    eq("port check (control: a socket no account is printed for, root's): asked as before, not by a known server",
+       (root[0], root[1], "not by a server the panel knows" in root[2], root[3]), (False, True, True, []))
+    eq("port check (control: a game that binds both protocols): another account's TCP socket on its port is a clash",
+       (gmod[0], gmod[1], "the 'p326pmc' account" in gmod[2], gmod[3]), (False, True, True, []))
+
+
 def _cleanup326():
     _db326.session.rollback()
     remotes = _ROWS326["remotes"] or [0]
@@ -193,7 +289,7 @@ with _p9.app_context():
         _p9_arm(who="part326")
         _cfg326.update_config(lambda cfg: cfg.update({_u326.CFG: {"start": "04:00", "end": "05:00", "off": []}}))
         _host326r, _su326 = _setup326()
-        for _sec326 in (_s1_window, _s1_row):
+        for _sec326 in (_s1_window, _s1_row, _s2_port):
             check("part326: %s ran to the end" % _sec326.__name__, _ran326(_sec326, _host326r, _su326), _ran326.last)
         eq("part326: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips326:], [])
     finally:
