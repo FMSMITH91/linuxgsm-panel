@@ -152,10 +152,12 @@
         var box = WS.el('wperf-obj-conn');
         if (!box || !d || !d.success) { WS.done(d, 'wperf-msg'); return; }
         WS.clear(box);
-        [['Host', d.host], ['Port', d.port], ['Password', d.password]].forEach(function (kv) {
-          var line = WS.node('div');
+        // The password masked until Show is pressed, with Copy (secret_field.js): never in the page's text before.
+        [['Host', d.host], ['Port', d.port], ['Password', null]].forEach(function (kv) {
+          var line = WS.node('div', 'd-flex flex-wrap gap-1 align-items-center');
           line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
-          line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
+          line.appendChild(kv[1] === null ? window.secretField({value: String(d.password == null ? '' : d.password)})
+            : WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
           box.appendChild(line);
         });
       });

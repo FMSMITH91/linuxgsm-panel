@@ -36,16 +36,13 @@ def _no_store(resp):
     return resp
 
 
-def _site(site_id):
-    """(site, None) when its administrators can be reached now, else (site, the refusal to answer)."""
-    site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
+def _refusal(site):
+    """The answer refusing to reach `site`'s administrators now, or None."""
     if site.kind != "wordpress":
-        return site, _w.say(409, S_NOT_WP)
+        return _w.say(409, S_NOT_WP)
     if site.state not in ("running", "stopped") or _w.setting_up(site.id):
-        return site, _w.say(409, S_BUSY)
-    if step_up_needed():
-        return site, step_up_refusal()
-    return site, None
+        return _w.say(409, S_BUSY)
+    return step_up_refusal() if step_up_needed() else None
 
 
 def _db_port(site):
@@ -87,7 +84,8 @@ def register(app):
     @app.route("/websites/<int:site_id>/app-admin/users", methods=["POST"])
     @login_required
     def website_app_admins(site_id):
-        site, refused = _site(site_id)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
+        refused = _refusal(site)
         if refused is not None:
             return refused
         ok, got = _w.host_call(_sw.wp_admins, site.remote, site, _db_port(site))
@@ -98,5 +96,6 @@ def register(app):
     @app.route("/websites/<int:site_id>/app-admin/reset", methods=["POST"])
     @login_required
     def website_app_admin_reset(site_id):
-        site, refused = _site(site_id)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
+        refused = _refusal(site)
         return refused if refused is not None else _reset(site, _w.body())

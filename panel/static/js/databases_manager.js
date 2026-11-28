@@ -90,12 +90,11 @@ function dbmEditorField(c, cell, isNew) {
   // st.rows is the rows on screen and st.rowsOf the table they are rows OF: Edit, Delete and Show all
   // act on that pair, never on rows drawn for one table with another table's name.
   var st = {db: null, tab: 'conn', tables: null, table: null, page: 0, rows: null, rowsOf: null, editing: null,
-            pw: null, busy: false, loaded: {}};
+            pw: null, hide: null, busy: false, loaded: {}};
   // The latest tables and rows request: a reply to an earlier one (another database, table or page
   // picked before it came back, over a slow host) is dropped, not drawn over the current one.
   var asked = {tables: 0, rows: 0};
-  var T = dbmT, node = dbmNode, raw = dbmRaw, button = dbmButton, readJson = dbmReadJson, sizeText = dbmSizeText,
-      failText = dbmFailText;
+  var T = dbmT, node = dbmNode, raw = dbmRaw, button = dbmButton, readJson = dbmReadJson, sizeText = dbmSizeText, failText = dbmFailText;
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
   function el(id) { return document.getElementById(id); }
   function say(text, cls) {
@@ -119,7 +118,8 @@ function dbmEditorField(c, cell, isNew) {
   // ── the dialog ──────────────────────────────────────────────────────────────────────────────────
   window.dbmOpen = function (sid, id, name, address, port) {
     st.db = {sid: sid, id: id, name: name, address: address, port: port};
-    st.tables = null; st.table = null; st.page = 0; st.pw = null; st.loaded = {}; st.editing = null;
+    unshow();
+    st.tables = null; st.table = null; st.page = 0; st.loaded = {}; st.editing = null;
     asked.tables++;
     forgetRows();
     el('dbm-title').textContent = name;
@@ -168,6 +168,7 @@ function dbmEditorField(c, cell, isNew) {
     var eye = button('', 'btn-outline-secondary db-icon-btn', 'dbmReveal', []);
     eye.title = st.pw ? T('Hide the password') : T('Show the password');
     eye.setAttribute('aria-label', eye.title);
+    eye.setAttribute('aria-pressed', st.pw ? 'true' : 'false');
     var i = node('i', st.pw ? 'bi bi-eye-slash' : 'bi bi-eye'); i.setAttribute('aria-hidden', 'true'); eye.appendChild(i);
     pr.insertBefore(eye, pr.lastChild);
     box.appendChild(pr);
@@ -179,9 +180,19 @@ function dbmEditorField(c, cell, isNew) {
       return res.d.password;
     });
   }
+  // A shown password is masked again by itself after 30 seconds and when the tab is hidden (secret_field.js).
+  function unshow() {
+    if (st.hide) st.hide();
+    st.hide = null;
+    st.pw = null;
+  }
   window.dbmReveal = function () {
-    if (st.pw) { st.pw = null; drawConn(); return; }
-    password().then(function (pw) { st.pw = pw; drawConn(); }, function (e) { say('✗ ' + e.message, 'text-danger'); });
+    if (st.pw) { unshow(); drawConn(); return; }
+    password().then(function (pw) {
+      st.pw = pw;
+      if (window.secretHideLater) st.hide = window.secretHideLater(function () { st.hide = null; unshow(); drawConn(); });
+      drawConn();
+    }, function (e) { say('✗ ' + e.message, 'text-danger'); });
   };
   window.dbmCopy = function (field) {
     if (field === 'password') {
@@ -498,7 +509,7 @@ function dbmEditorField(c, cell, isNew) {
   };
 
   // What the dump, upload, password and delete handlers (below, in their own scope) use of this one's.
-  window.dbmCtx = {st: st, api: api, say: say, postJson: postJson, failed: failed, drawConn: drawConn};
+  window.dbmCtx = {st: st, api: api, say: say, postJson: postJson, failed: failed, drawConn: drawConn, unshow: unshow};
 })();
 
 (function () {
@@ -639,7 +650,7 @@ function dbmEditorField(c, cell, isNew) {
   window.dbmReset = function () {
     window.confirmDialog({title: T('Reset password'), icon: 'key', confirmClass: 'btn-warning', confirmLabel: T('Reset password'),
       bodyText: T('Anything using the old password stops connecting until you update its config.'),
-      onConfirm: function () { act('reset-password', {}, T('Setting a new password…'), function () { st.pw = null; c.drawConn(); }); }});
+      onConfirm: function () { act('reset-password', {}, T('Setting a new password…'), function () { c.unshow(); c.drawConn(); }); }});
   };
   window.dbmRestoreFiles = function () {
     var name = st.db.name;

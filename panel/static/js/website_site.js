@@ -440,7 +440,7 @@
       li.appendChild(WS.raw('span', 'fw-semibold text-break', db.name));
       var acts = WS.node('span', 'd-flex flex-wrap gap-2');
       acts.appendChild(WS.button(WS.T('Show connection settings'), 'key', 'wsDbReveal', [Number(db.id)]));
-      acts.appendChild(WS.button(WS.T('Reset password'), 'arrow-repeat', 'wsDbReset', [Number(db.id)], 'btn-outline-warning'));
+      acts.appendChild(WS.button(WS.T('Reset password'), 'arrow-repeat', 'wsDbReset', [Number(db.id), String(db.app_settings || '')], 'btn-outline-warning'));
       if (WS.can.admin) acts.appendChild(WS.button(WS.T('Delete'), 'trash', 'wsDbDelete', [Number(db.id), String(db.name)], 'btn-outline-danger'));
       li.appendChild(acts);
       li.appendChild(WS.node('div', 'w-100 small font-monospace ws-db-conn', ''));
@@ -467,16 +467,34 @@
       WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
     });
   };
-  // A new password for the database's own user (the app's settings must then be given it).
-  window.wsDbReset = function (dbId) {
+  // A new password for the database's own user. `app` (the server's words): what happens to the site's app, which
+  // gets the new password in the same step; "" for a database no app is known to use, whose code must then be given
+  // it, shown masked under the row.
+  window.wsDbReset = function (dbId, app) {
     window.confirmDialog({title: WS.T('Reset this database password?'), icon: 'key', confirmClass: 'btn-warning',
-      confirmLabel: WS.T('Reset password'), bodyText: WS.T('The site stops reaching the database until its settings have the new password.'),
+      confirmLabel: WS.T('Reset password'),
+      bodyText: app || WS.T('The site stops reaching the database until its settings have the new password.'),
       onConfirm: function () {
         WS.stepUp(function () {
-          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/reset-password', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
+          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/reset-password', {}).then(function (d) {
+            if (WS.done(d, 'wdb-msg') && d.password) showConn(dbId, [['New password', null]], String(d.password));
+          });
         });
       }});
   };
+  // The connection settings under a database's row: `rows` as [label, value]; the password (`secret`) masked until
+  // Show is pressed, with Copy (secret_field.js), never in the page's text before.
+  function showConn(dbId, rows, secret) {
+    var box = WS.el('wdb-conn-' + Number(dbId));
+    if (!box) return;
+    WS.clear(box);
+    rows.forEach(function (kv) {
+      var line = WS.node('div', 'd-flex flex-wrap gap-1 align-items-center');
+      line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
+      line.appendChild(kv[1] === null ? window.secretField({value: secret}) : WS.raw('span', 'user-select-all', String(kv[1])));
+      box.appendChild(line);
+    });
+  }
   // Administrators only, with the database's name typed.
   window.wsDbDelete = function (dbId, name) {
     window.confirmDialog({title: WS.T('Delete this database?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete'),
@@ -492,15 +510,10 @@
   window.wsDbReveal = function (dbId) {
     WS.stepUp(function () {
       WS.post('/websites/' + ID + '/databases/credentials', {id: dbId}).then(function (d) {
-        var box = WS.el('wdb-conn-' + dbId);
-        if (!box || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
-        WS.clear(box);
-        [['Host', d.host], ['Port', d.port], ['Database', d.name], ['User', d.user], ['Password', d.password]].forEach(function (kv) {
-          var line = WS.node('div');
-          line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
-          line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
-          box.appendChild(line);
-        });
+        if (!WS.el('wdb-conn-' + dbId) || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
+        var val = function (v) { return v == null ? '' : v; };
+        showConn(dbId, [['Host', val(d.host)], ['Port', val(d.port)], ['Database', val(d.name)], ['User', val(d.user)],
+                        ['Password', null]], String(val(d.password)));
       });
     });
   };

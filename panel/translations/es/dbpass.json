@@ -17,9 +17,17 @@
   "That account is not an administrator of this WordPress site.": "Esa cuenta no es administradora de este sitio WordPress.",
   "The administrator has a new password and was signed out everywhere.": "El administrador tiene una nueva contraseña y se cerró su sesión en todas partes.",
   "The administrator is signed out of WordPress everywhere. The panel never stores the password; this is written to the audit log.": "Se cierra la sesión del administrador en WordPress en todas partes. El panel nunca guarda la contraseña; esto queda en el registro de auditoría.",
+  "The app's settings file does not hold this database's current password, so the password was not changed: the site keeps working.": "El archivo de ajustes de la aplicación no contiene la contraseña actual de esta base de datos, así que la contraseña no se cambió: el sitio sigue funcionando.",
+  "The app's variables ({names}) get the new password, and the app is restarted.": "Las variables de la aplicación ({names}) reciben la nueva contraseña y la aplicación se reinicia.",
+  "The database has a new password and the app's variables ({names}) have it; the app was restarted.": "La base de datos tiene una nueva contraseña y las variables de la aplicación ({names}) la tienen; la aplicación se reinició.",
+  "The database has a new password and {app}'s settings have it: the site keeps working.": "La base de datos tiene una nueva contraseña y los ajustes de {app} la tienen: el sitio sigue funcionando.",
+  "The database has a new password. The site's code must be given it: it cannot reach the database until then.": "La base de datos tiene una nueva contraseña. Hay que dársela al código del sitio: hasta entonces no puede llegar a la base de datos.",
+  "The new password did not work ({why}) and the old one could not be put back everywhere ({left}). Reset the password again.": "La nueva contraseña no funcionó ({why}) y la anterior no se pudo volver a poner en todas partes ({left}). Restablece la contraseña de nuevo.",
+  "The new password did not work ({why}), so the old one was put back: the site keeps working.": "La nueva contraseña no funcionó ({why}), así que se volvió a poner la anterior: el sitio sigue funcionando.",
   "The panel can reset the administrator password of a WordPress site only.": "El panel solo puede restablecer la contraseña de administrador de un sitio WordPress.",
   "The panel resets the administrator password of WordPress sites. For this app, use its own \"Forgot password\" link on its sign-in page: it emails the administrator, so the site needs outgoing mail.": "El panel restablece la contraseña de administrador de los sitios WordPress. Para esta aplicación, usa su propio enlace «He olvidado la contraseña» en su página de inicio de sesión: envía un correo al administrador, así que el sitio necesita correo saliente.",
   "The website is being set up. Wait until it is running or stopped, then try again.": "El sitio web se está configurando. Espera a que esté en marcha o detenido y vuelve a intentarlo.",
   "WordPress did not answer: is it installed on this site? Its database must be reachable too.": "WordPress no respondió: ¿está instalado en este sitio? Su base de datos también debe estar accesible.",
-  "WordPress refused that email address.": "WordPress rechazó esa dirección de correo."
+  "WordPress refused that email address.": "WordPress rechazó esa dirección de correo.",
+  "{app}'s settings get the new password; the site keeps working.": "Los ajustes de {app} reciben la nueva contraseña; el sitio sigue funcionando."
 }

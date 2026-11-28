@@ -174,5 +174,6 @@
 {% endif %}
 {% endblock %}
 {% block scripts %}
-{% if manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/databases_manager.js') }}"></script>{% endif %}
+{% if manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/secret_field.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/databases_manager.js') }}"></script>{% endif %}
 {% endblock %}

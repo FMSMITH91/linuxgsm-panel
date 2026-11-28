@@ -89,6 +89,8 @@ OK_WAITING = ("The app's account and folders are ready, and it waits for its fil
               "press Save and rebuild on the App tab, which installs its packages and starts it.")
 OK_ENV = "The app's variables were written and it was restarted."
 OK_STEP = "Step done."
+NOT_IN_SETTINGS = ("The app's settings file does not hold this database's current password, so the password was not "
+                   "changed: the site keeps working.")
 STEP_DETAIL = "{why} The host said: {detail}."
 # A line an install step's own shell prints (never an installer's): a mark, or one of its key=value lines.
 _OWN_LINE_RE = re.compile(r"(SITE_[A-Z_]{1,40}|(error|check|page|code)=[^\x00-\x1f]{1,200})\Z")
@@ -1029,6 +1031,32 @@ def wp_admin_reset(remote, site, user, password, email="", db_port=3306):
     if "SITE_BUILD_FAILED" in (out or ""):
         return False, _mark(out)
     return _wa.reset_answer(out)
+
+
+def app_db_password(remote, site, files, before, old, new):
+    """Put database password `new` where `old` is in the app's settings `files` (services.website_db_password).
+
+    As the site's account, both passwords on stdin only. (ok, sentence); a file that does not hold `old` is
+    NOT_IN_SETTINGS, and nothing was written then.
+    """
+    from panel.services import website_db_password as _wdp
+    ok, out = _as_site(remote, site.account, _ws()._ENV + _wdp.rewrite_sh(files, before), timeout=120,
+                       stdin_text=_wdp.rewrite_stdin(old, new))
+    if ok and _wdp.MARK_DONE in (out or ""):
+        return True, OK_STEP
+    if _wdp.MARK_NOT_FOUND in (out or ""):
+        return False, NOT_IN_SETTINGS
+    return False, step_failure(site, {"name": "db-password", "type": "render-config"}, out)
+
+
+def db_reaches(remote, site, values, prefix, db_port):
+    """Whether the site's database answers `values`' password from the site's own network, its tables there.
+
+    verify-install's table check (a one-off container of the site's image, every value from its read-only
+    values folder) with the app's table prefix: (ok, sentence).
+    """
+    step = {"name": "db-check", "type": "verify-install", "tables": prefix}
+    return app_install_step(remote, site, step, dict(values, _db_port=db_port))
 
 
 def new_token():

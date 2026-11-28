@@ -478,7 +478,9 @@ def _app(site):
 def _manager_parts(out, site):
     """Add what someone who runs the site reads: its databases, PHP, performance, rules and app."""
     from panel.routes.databases_sites import site_rows
-    out["databases"] = [{"id": r.id, "name": r.name, "user": r.name} for r in site_rows(site)]
+    from panel.routes.databases_sites_reset import confirm_words
+    out["databases"] = [{"id": r.id, "name": r.name, "user": r.name, "app_settings": confirm_words(site, r)}
+                        for r in site_rows(site)]
     out["php"] = _php(site)
     out["perf"] = _perf(site)
     out["rules"] = json.loads(site.custom_rules or "[]")
