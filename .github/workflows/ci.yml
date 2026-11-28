@@ -282,12 +282,13 @@ jobs:
             # The step's shell is `bash -e`, and the subshell inherits it: the root run's own exit
             # status (non-zero by design, the next step judges its log) must not end the subshell
             # before the timing is written, nor become `wait`'s answer.
-            sudo -E env PATH="$PATH" UNIT_SHARD="${UNIT_SHARD}" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
+            sudo -E env PATH="$PATH" UNIT_SHARD="${UNIT_SHARD}" UNIT_PART_TIMES="${RUNNER_TEMP}/unit-times-root.json" \
+              bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
             echo "$((SECONDS - started))" > "${RUNNER_TEMP}/unit-root-seconds.txt"
           ) < /dev/null > "${RUNNER_TEMP}/unit-root.txt" 2>&1 &
           root_pid=$!
           PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" RUN_TESTS_UNIT=only \
-            bash tools/run-tests.sh || exit
+            UNIT_PART_TIMES="${RUNNER_TEMP}/unit-times-user.json" bash tools/run-tests.sh || exit
           wait "${root_pid}"
 
       - name: Run the root-only unit checks, as root
@@ -324,6 +325,8 @@ jobs:
           fi
           root_log="${RUNNER_TEMP}/unit-root.txt"
           echo "the unit suite as root took $(cat "${RUNNER_TEMP}/unit-root-seconds.txt" 2>/dev/null || echo '?')s"
+          # Its parts' times (tests/unit/timing.py's block), as the run as the runner prints its own above.
+          sed -n '/^unit part times /,/ s in all, /p' "${root_log}" 2>/dev/null | sed 's/^/as root: /' || true
           python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
           import re
           import sys

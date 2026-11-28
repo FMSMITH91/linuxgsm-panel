@@ -2144,6 +2144,7 @@ _r16d_wrap_ts_handles()
 # part309 (History from 24 hours to a year: the hourly rollup tick, the long ranges' routes, the pages and their scripts) drives part12's app and node; imports
 # part01, 12, 75 and 131. part316 (websites' fixes) imports part01, 12 and 301. part319 (websites' egress proxy and gate) imports part01, 12 and 301.
 # part323 (game updates on the Updates page) imports part01, 12, 301 and 322. part324 (fixes a host's proof asked for) imports part01, 12, 301 and 322.
+# part325 (the part clock, the shard weights, test impact selection and CI's use of it) imports part01 and 06.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2166,7 +2167,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
     "part298", "part299", "part300", "part301", "part302", "part305", "part306", "part294", "part297", "part296", "part295", "part303", "part307", "part308",
     "part309", "part310", "part311", "part317", "part313", "part314", "part315", "part316", "part318", "part319", "part320", "part321", "part322", "part323",
-    "part324", "part15")
+    "part324", "part325", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2248,13 +2249,16 @@ def _r26d_pin_helper(part):
 # notes, the import order, every part file in _PARTS, the shards owning each part once) run in the
 # unsplit run and in shard 1 only (_whole_check), so the shards together run each of them once.
 _RUN_PARTS = _shard.RUN = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
+_clock = importlib.import_module("unit.timing").PartClock(os.environ)   # UNIT_PART_TIMES=<file>: time each part
 for _part in _RUN_PARTS:
     _path_before = list(sys.path)
     _r26d_pin_helper(_part)
     # Again before each part: part05 reinstalls nosudo_runner's shim over every module's subprocess,
     # and that replaced this answer for the rest of the run.
     _r16d_wrap_ts_handles()
+    _clock.start(_part)
     importlib.import_module("unit." + _part)
+    _clock.stop()
     _hub_after.append((_part, _hub_leftovers()))
     if (tempfile.mkdtemp is not _r15d_tracked_mkdtemp or tempfile.mkstemp is not _r15d_tracked_mkstemp
             or tempfile._mkstemp_inner is not _r16d_tracked_mkstemp_inner):
@@ -2270,6 +2274,7 @@ for _part in _RUN_PARTS:
               if os.path.realpath(_p).startswith(os.path.join(os.path.realpath(_root), "tools"))]
     if set(sys.path) != set(_path_before) or _ahead:
         _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
+_clock.report()
 # What the LAST part left, which no pin after it reads (review 1016f lead).
 _r29d_last_left = tuple(getattr(sys.modules.get(_m), "_HELPER_STATE", {}).get("present", "not loaded")
                         for _m in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"))

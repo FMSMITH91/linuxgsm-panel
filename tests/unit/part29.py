@@ -532,8 +532,10 @@ def _ci1_run_step_bad(run_step):
         bad.append("run-tests.sh is not given UNIT_LOG")
     # UNIT_SHARD by `env` after sudo: Ubuntu 26.04's sudo-rs drops it through -E, and the root run then ran the
     # whole suite (1114 s) and failed the shard comparison (#615).
-    sudo = "sudo -E env PATH=\"$PATH\" UNIT_SHARD=\"${UNIT_SHARD}\" bash -c 'unset \"${!SUDO_@}\"; exec python tests/unit_test.py'"
-    if not all(w in run for w in (sudo + " || true", '> "${RUNNER_TEMP}/unit-root.txt"', 'wait "${root_pid}"')):
+    # Other settings may follow UNIT_SHARD there (UNIT_SELECT, UNIT_PART_TIMES), each a quoted VAR="value".
+    sudo = (r'sudo -E env PATH="\$PATH" UNIT_SHARD="\$\{UNIT_SHARD\}" (?:[A-Z_]+="[^"]*" )*'
+            r'bash -c \'unset "\$\{!SUDO_@\}"; exec python tests/unit_test\.py\' \|\| true')
+    if not (_re29.search(sudo, run) and all(w in run for w in ('> "${RUNNER_TEMP}/unit-root.txt"', 'wait "${root_pid}"'))):
         # `|| true`: the step runs under `bash -e`, which the backgrounded subshell inherits, and the
         # root run exits non-zero by design, so without it `wait` failed a green leg (#431).
         bad.append("the run-tests step does not run the suite as root with its shard, SUDO_* unset, `|| true` "
