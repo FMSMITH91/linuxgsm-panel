@@ -172,7 +172,7 @@ def run_parts(shard, parts, graph, selected=None):
 
 SELECTED = None
 RUN = ()      # the runner's run list (tests/unit_test.py sets it from start())
-_WATCH = []   # (the part clock, the impact recorder) of this run, set by start()
+_WATCH = [None, None]   # (the part clock, the impact recorder) of this run, set by start()
 
 
 def start(shard, parts, root, environ):
