@@ -84,6 +84,12 @@ def _due(ref, remote, cfg, now):
     return key if key is not None and _DONE.get(ref) != key else None
 
 
+def tried_now(ref, remote, cfg, now=None):
+    """Whether `ref` was already tried in the window its host's clock is in now: it then waits for the next night."""
+    key = U.window_key(U.host_now(remote, now), cfg)
+    return key is not None and _DONE.get(ref) == key
+
+
 def wanted(ref, security, cfg):
     """Whether the window applies an item's update: automatic updates on for it, or a security update."""
     return bool(security) or U.auto_on(ref, cfg)

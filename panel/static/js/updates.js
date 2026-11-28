@@ -1,7 +1,8 @@
 // The Updates page (templates/updates.html). GET /api/updates:
 //   {groups: [{key, title, items: [{kind, ref, name, host, what: [..], notes: [{title, url}], cost, security,
-//     safe, auto, auto_editable, when, action: {post, body, step_up} | {href} | null, link}]}], count,
-//    settings: {start, end, can_edit, owasp_auto, off}, history: [{at, who, action, target, ok, detail}]}
+//     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up} | {href} | null,
+//     link}]}], count, settings: {start, end, can_edit, owasp_auto, off},
+//    history: [{at, at_host (on the clock of the host the row is about), who, action, target, ok, detail}]}
 // Every text the server sends is already in the viewer's language. Update now runs the item's own route
 // (or opens the card that runs it, with that card's confirmation); nothing here decides what the server allows.
 (function () {
@@ -158,6 +159,8 @@
     });
     return b;
   }
+  // The row stays where it is with its result (the button gone): the history, the count and the warnings are read
+  // again, the rows are not, so a finished update is not a row that just vanished.
   function runUpdate(r, b, out) {
     b.disabled = true;
     out.className = 'small mt-1 text-secondary';
@@ -230,7 +233,6 @@
     rows.slice(0, all ? rows.length : HISTORY_SHOWN).forEach(function (h) { ul.appendChild(historyItem(h)); });
     var more = document.getElementById('upd-history-more');
     if (more) more.hidden = all || rows.length <= HISTORY_SHOWN;
-    if (window.localizeTimes) window.localizeTimes(ul);
   }
   window.updHistoryMore = function () { renderHistory((last && last.history) || [], true); };
 

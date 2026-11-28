@@ -20,6 +20,7 @@ who holds Manage add-ons on it; a website whoever may see it (a customer their o
 who administers it.
 """
 import threading
+from datetime import timezone
 
 from flask import jsonify, render_template, url_for
 from flask_login import current_user, login_required
@@ -68,7 +69,11 @@ def nav_url():
 
 
 # ── the rows ───────────────────────────────────────────────────────────────────────────────────
-def _when_auto(auto, security, cfg):
+def _when_auto(auto, security, cfg, tried=False):
+    """When the nightly window updates an item; `tried`: it was tried in tonight's window already and waits."""
+    if tried and (auto or security):
+        return U.tr("Tried in tonight's window, it waits: by itself the next night at {at} (the host's clock).",
+                    at=cfg["start"])
     if auto:
         return U.tr("By itself tonight at {at} (the host's clock).", at=cfg["start"])
     if security:
@@ -166,6 +171,7 @@ def _addon_row(gs, k, seen, cfg, sec):
     from panel.services import addons as _ad
     ref, security = "addon:%d:%s" % (gs.id, k), k in sec["addons"]
     auto = U.auto_on(ref, cfg)
+    tried = UA.tried_now(ref, gs.remote, cfg)
     what = [U.tr("{old} to {new}.", old=seen.get("version") or "?",
                  new=seen.get("new") or U.tr("a newer version of the add-on"))]
     return _row("addon", ref, "%s · %s" % (_ad.CATALOG[k]["name"], gs.name),
@@ -173,9 +179,33 @@ def _addon_row(gs, k, seen, cfg, sec):
                 what=what + ([sec["note"]] if security and sec["note"] else []),
                 notes=[{"title": U.tr("Release notes"), "url": _ad.CATALOG[k]["source"] + "/releases"}],
                 cost=U.tr(U.COST_ADDON), safe=True, security=security, auto=auto, auto_editable=True,
-                when=_when_auto(auto, security, cfg),
+                when=_when_auto(auto, security, cfg, tried),
                 action={"post": url_for("api_server_addon_update", server_id=gs.id, addon_id=k), "step_up": True},
                 link=url_for("server_detail", server_id=gs.id))
+
+
+# What each revision of a site's files (services/websites.SITE_FILES_REV) changes, for the kinds it changes; a site
+# behind on an older one, or on one that changes nothing it can see, reads the general line.
+FILES_NOTES = {
+    "files-7": (("wordpress",), "WordPress's Site Health reads the web proxy's own page cache (a page cache it found "
+                                "nothing of before)."),
+    "files-6": (("php", "wordpress", "phpbb"), "Its answers no longer name the web proxy's private header in Vary."),
+    "files-5": (("wordpress",), "WordPress may reach the two more WordPress.org addresses its Site Health and "
+                                "background updates need."),
+}
+S_FILES_GENERAL = "New server settings from the panel for its container."
+
+
+def _files_changes(site):
+    """What the site files' revisions after the one `site` runs bring it, in the viewer's words."""
+    from panel.services import websites as _svc
+    have = re.fullmatch(r"files-([0-9]{1,4})", site.image_key or "")
+    want = int(_svc.SITE_FILES_REV.split("-")[1])
+    revs = ["files-%d" % n for n in range(want, int(have.group(1)), -1)] if have else []
+    if not have or any(r not in FILES_NOTES for r in revs):
+        return [U.tr(S_FILES_GENERAL)]
+    said = [U.tr(FILES_NOTES[r][1]) for r in revs if site.kind in FILES_NOTES[r][0]]
+    return said or [U.tr(S_FILES_GENERAL)]
 
 
 def site_changes(site):
@@ -188,8 +218,16 @@ def site_changes(site):
     if site.image_digest != _w.current_image(site):
         out.append(U.tr("A newer signed image of its software: base system and security fixes."))
     if site.image_key != _svc.SITE_FILES_REV:
-        out.append(U.tr("New server settings from the panel for its container."))
+        out += _files_changes(site)
     return out
+
+
+def site_cost(site):
+    """What a website's Update costs: a build first only when its image changes and the panel builds it on the host."""
+    from panel.routes import websites as _w
+    from panel.services import websites as _svc
+    builds = site.image_digest != _w.current_image(site) and _svc.site_build(site) is not None
+    return U.tr(U.COST_SITE_BUILD if builds else U.COST_SITE)
 
 
 def site_schedule(site, cfg=None, sec=None):
@@ -198,8 +236,9 @@ def site_schedule(site, cfg=None, sec=None):
     sec = sec or U.security()
     ref = "website:%d" % site.id
     auto, security = U.auto_on(ref, cfg), U.site_part(site) in sec["sites"]
-    return {"auto": auto, "security": security, "at": cfg["start"], "when": _when_auto(auto, security, cfg),
-            "note": "" if auto else U.tr(U.S_AUTO_OFF_NOTE)}
+    tried = site.remote is not None and UA.tried_now(ref, site.remote, cfg)
+    return {"auto": auto, "security": security, "at": cfg["start"], "when": _when_auto(auto, security, cfg, tried),
+            "note": "" if auto else U.tr(U.S_AUTO_OFF_NOTE), "cost": site_cost(site)}
 
 
 def _site_rows(user, cfg, sec):

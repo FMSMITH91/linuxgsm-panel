@@ -8,7 +8,7 @@
 | Host system | Each host's OS packages, security ones counted apart | Services may restart; a kernel update needs a reboot | Security packages, where the host has automatic security updates on (the host's page says) |
 | Game servers | A server whose LinuxGSM is behind its latest release, with that release's notes | None: players stay on | A scheduled task of the server's that runs `update-lgsm`, when its crontab has one (the row says when, as the server's Scheduled tasks card last read it); otherwise press **Update now**, or add the task on that card. |
 | Add-ons | An add-on whose image differs from the signed catalog's | The add-on restarts (about a minute); players stay on | The nightly window |
-| Websites | A site with a newer image or new server settings from the panel | A few seconds offline | The nightly window |
+| Websites | A site with a newer image or new server settings from the panel (the row says what they change) | A few seconds offline; a few minutes first when its new image is built on the host | The nightly window |
 
 Each row says what the update changes, what it costs, whether it is a **security update**, and when it installs by
 itself. **Update now** runs the item's own update (the same as its own page's button, with the same password
@@ -50,8 +50,8 @@ the weakness, and asks for a patch management process and staged rollouts instea
 ## History
 
 The **History** fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
-ended (done, failed, or waited for the next window). It is read from the audit log, so it shows the same rows the
-Audit Logs page shows you.
+ended (done, failed, or waited for the next window). Each time is on the clock of the host the update ran on, as the
+window's times are. It is read from the audit log, so it shows the same rows the Audit Logs page shows you.
 
 ## Marking a security update in the catalog
 
