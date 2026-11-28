@@ -124,6 +124,15 @@ def after_run(gs_id, action, out, rc, done, secs=None):
     return got["remote"] if got["state"] == "available" else ""
 
 
+def complete_detail(built, detail):
+    """An update's audit detail: "Updated to build <built>. " first when it installed one, then its output's tail.
+
+    The Updates page's History reads that first sentence (routes/updates.plain_detail); the tail is the audit log's.
+    """
+    lead = "Updated to build %s. " % built if built else ""
+    return lead + (detail or "")[-(300 - len(lead)):]
+
+
 def seen(gs_id):
     """What the last check-update or update of `gs_id` said ({} when the panel has not read it yet)."""
     with _LOCK:

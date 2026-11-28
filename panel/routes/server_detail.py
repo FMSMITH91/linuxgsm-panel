@@ -1172,11 +1172,9 @@ def _bg_action(app, gs, remote, action, on_done=None):
                     ok, detail = _lg264_said(oc, action, gs, gs is not None,
                                              (None, None, gs.name if gs else short_name))
                     return
-                # The build an update installed leads the row (the Updates page's History says it); the raw
-                # output's tail follows it, for the audit log.
-                lead = "Updated to build %s. " % built if built else ""
+                # The build an update installed leads the row (the Updates page's History says it).
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
-                           success=(rc == 0), detail=lead + detail[-(300 - len(lead)):], server=gs)
+                           success=(rc == 0), detail=_gu.complete_detail(built, detail), server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the
                 # cached port scan so the dashboard shows the real state on its next poll.
                 _sm._invalidate_port_scan(remote_id)

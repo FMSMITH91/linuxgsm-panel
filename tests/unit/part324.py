@@ -483,7 +483,8 @@ def _node324(page, scripts, scenario, routes):
 
     And getElementById('') is null, as a browser's is (settings.js asks for an optional note by an empty id).
     """
-    import unit.part301 as _p301
+    import importlib
+    _p301 = importlib.import_module("unit.part301")
     saved = _p301._HARNESS301
     try:
         _p301._HARNESS301 = saved.replace("confirmDialog: function (o) {",
@@ -660,15 +661,21 @@ def _admin_server324(path, got):
                 conn.settimeout(5)
                 data = b""
                 while b"\r\n\r\n" not in data:
-                    data += conn.recv(4096)
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        return            # this part's own poke (no apply connected): nothing to answer
+                    data += chunk
                 head, _sep, body = data.partition(b"\r\n\r\n")
                 want = int(_re324.search(rb"Content-Length: (\d+)", head).group(1))
                 while len(body) < want:
-                    body += conn.recv(4096)
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    body += chunk
                 got["req"] = head + b"\r\n\r\n" + body
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
         except OSError:
-            pass
+            got["error"] = "the stand-in socket failed"     # read by no check: the request is then missing
         finally:
             srv.close()
     t = _th324.Thread(target=_serve, daemon=True)
@@ -710,20 +717,24 @@ def _apply324(d, old_text, new_text, admin):
     finally:
         seams.restore()
     if server is not None:
-        server.join(5)
+        if "req" not in got:                  # nothing connected: end the waiting accept now
+            with _socket324.socket(_socket324.AF_UNIX, _socket324.SOCK_STREAM) as poke:
+                poke.connect(sock)
+        server.join(15)
     return rc, out, [c for c in calls if c[:1] in (["restart"], ["reload"])], got.get("req", b"")
 
 
 def _s8_reload():
     head = _H322.WEB_CONF_HEAD + "\n{\n%s\n\tpersist_config off\n}\n"
     sock_line = "\tadmin unix/%s|0200"
-    d = _tf324.mkdtemp(prefix="p324a-", dir="/tmp")         # a unix socket's path must stay short
+    d = _tf324.mkdtemp(prefix="p324a-", dir="/tmp")  # nosec B108 - private (0700); a unix socket path stays under 108 bytes
     try:
         line = sock_line % os.path.join(d, "admin.sock")
         cache_on = head % line + "a.example.org {\n\trespond 200\n}\n"
         cache_on2 = head % line + "b.example.org {\n\trespond 200\n}\n"
         on = _apply324(d, cache_on, cache_on2, True)
-        os.path.exists(os.path.join(d, "admin.sock")) and os.unlink(os.path.join(d, "admin.sock"))
+        if os.path.exists(os.path.join(d, "admin.sock")):
+            os.unlink(os.path.join(d, "admin.sock"))
         off = _apply324(d, head % "\tadmin off" + "a.example.org {\n}\n", head % "\tadmin off" + "b.example.org {\n}\n",
                         False)
     finally:
@@ -745,10 +756,9 @@ def _cleanup324():
     _Audit324.query.filter(_Audit324.website_id.in_(sites or [0])).delete(synchronize_session=False)
     _Audit324.query.filter(_Audit324.remote_id.in_(remotes)).delete(synchronize_session=False)
     _Audit324.query.filter(_Audit324.game_server_id.in_(_ROWS324["servers"] or [0])).delete(synchronize_session=False)
-    for d in _Dom324.query.filter(_Dom324.website_id.in_(sites or [0])).all():
-        _db324.session.delete(d)
-    for p in _Proxy324.query.filter(_Proxy324.remote_id.in_(remotes)).all():
-        _db324.session.delete(p)
+    for row in (_Dom324.query.filter(_Dom324.website_id.in_(sites or [0])).all()
+                + _Proxy324.query.filter(_Proxy324.remote_id.in_(remotes)).all()):
+        _db324.session.delete(row)
     for model, ids in ((_Site324, sites), (_GS324, _ROWS324["servers"]), (_User324, _ROWS324["users"]),
                        (_Remote324, _ROWS324["remotes"])):
         for i in ids:
@@ -756,6 +766,11 @@ def _cleanup324():
             if row is not None:
                 _db324.session.delete(row)
     _db324.session.commit()
+    _forget324()
+
+
+def _forget324():
+    """What the panel keeps outside the database for this part's rows: the cursor, the window, the servers' reads."""
     from panel.routes import websites_guard as _rg
     _cfg324.update_config(lambda cfg: cfg.pop(_rg.CURSOR_KEY, None))
     _cfg324.update_config(lambda cfg: cfg.pop(_u324.CFG, None))
@@ -767,12 +782,12 @@ def _cleanup324():
 
 
 def _ran324(step, *args):
-    """Run one section: its result (True for none), or None when it raised (the traceback kept in _ran324.last)."""
+    """Run one section: True when it ran to the end, else None (the traceback kept in _ran324.last)."""
     import traceback
     try:
-        got = step(*args)
+        step(*args)
         _ran324.last = ""
-        return True if got is None else got
+        return True
     except Exception:  # noqa: BLE001 - a section that raises is reported by name and the rest still run
         from flask import has_app_context
         if has_app_context():

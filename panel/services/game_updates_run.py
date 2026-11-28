@@ -187,19 +187,27 @@ def update_game(app, gs, who, backup):
     online = bool(backup) and get_server_status(gs.remote, gs) == "online"
     for action in _steps(backup, online):
         ok, said = _run_wait(app, gs, action, who)
-        if ok:
-            continue
-        stopped = ""
-        if action == "start":
-            stopped = _left_stopped(gs, who, said)
-        elif online and action in ("backup", "update"):
-            stopped = _start_again(app, gs, who)    # it was running before the run stopped it
-        if ok is None:
-            _skipped(gs, "LinuxGSM postponed its %s: %s" % (action, said), who)
-        if ok is False or stopped:
-            _alert(gs.name, action, said if ok is False else "LinuxGSM postponed it", stopped)
-        return False
+        if not ok:
+            _step_failed(app, gs, who, (action, ok, said), online)
+            return False
     return True
+
+
+def _step_failed(app, gs, who, step, online):
+    """After a step of update_game that did not run (`step`: action, ok False or None for postponed, what it said).
+
+    A server the run stopped is started again; one that does not start is left stopped, with its History row.
+    """
+    action, ok, said = step
+    stopped = ""
+    if action == "start":
+        stopped = _left_stopped(gs, who, said)
+    elif online and action in ("backup", "update"):
+        stopped = _start_again(app, gs, who)    # it was running before the run stopped it
+    if ok is None:
+        _skipped(gs, "LinuxGSM postponed its %s: %s" % (action, said), who)
+    if ok is False or stopped:
+        _alert(gs.name, action, said if ok is False else "LinuxGSM postponed it", stopped)
 
 
 def _start_again(app, gs, who):

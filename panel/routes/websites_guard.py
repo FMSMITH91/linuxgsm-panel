@@ -138,6 +138,11 @@ def _entry_json(e):
             "since": _when(e["at"]), "until": _when(e["until"])}
 
 
+def _listed(entries, ip):
+    """Whether the host's deny list `entries` holds address `ip` (for any site)."""
+    return any(e["ip"] == ip for e in entries)
+
+
 def site_entries(site, entries):
     """The entries of the host's list banned while asking for one of `site`'s names."""
     names = {d.domain for d in site.domains}
@@ -178,7 +183,7 @@ def register(app):
         if ip not in {e["ip"] for e in site_entries(site, got)}:
             # Lifted already (its ban ended, or fail2ban's unbanip on the host): the host lists it nowhere, so the
             # row the page still shows goes. An address another site's attackers list holds is not this site's to lift.
-            if _wg.is_address(ip) and ip not in {e["ip"] for e in got}:
+            if _wg.is_address(ip) and not _listed(got, ip):
                 return jsonify({"success": True, "message": i18n.tr(S_ALREADY), "already": True})
             return _w.say(404, S_NOT_BLOCKED)
         ok, said = _w.host_call(_sw.guard_release, site.remote, ip)

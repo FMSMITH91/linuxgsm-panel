@@ -36,6 +36,12 @@ class Listening(set):
         super().__init__(ports)
         self.owners = {p: set(o) for p, o in (owners or {}).items()}
 
+    def __eq__(self, other):
+        """Equal as port sets: who holds a port is detail a caller may read, never part of the set's value."""
+        return set.__eq__(self, other)
+
+    __hash__ = None              # a set: never hashable
+
     def copy(self):
         return Listening(self, self.owners)
 
