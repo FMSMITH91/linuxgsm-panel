@@ -3881,7 +3881,8 @@ def _web_guard_apply(guard, pw):
     old = (_web_read(WEB_GUARD_JAIL_FILE) or b"").decode("utf-8", "replace")
     action_changed = _web_read(WEB_GUARD_ACTION_FILE) not in (None, WEB_GUARD_ACTION_TEXT.encode())
     _web_guard_files(guard, pw)
-    sys.stdout.write("guard=on\nfail2ban=%s\n" % _web_f2b_reload())
+    new = (_web_read(WEB_GUARD_JAIL_FILE) or b"").decode("utf-8", "replace")
+    sys.stdout.write("guard=on\nfail2ban=%s\n" % _web_f2b_reload(web_guard_changed_actions(old, new, action_changed)))
 
 
 def _web_guard_off():
@@ -4161,8 +4162,23 @@ def do_website_guard_list(args, content):
     return 0
 
 
+def _web_f2b_banned(jail, ip):
+    """Whether fail2ban's `jail` still bans `ip` (`get <jail> banip`); no fail2ban or no such jail: False."""
+    try:
+        rc, out = _run_quiet([resolve(F2B), "get", jail, "banip"], timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return rc == 0 and ip in out.split()
+
+
 def do_website_guard_release(args, content):
-    """The panel's Unban: fail2ban told to lift the address (its firewall ban too), and its entry removed. Prints released=."""
+    """The panel's Unblock: the address's entry removed, then fail2ban told to lift it (its firewall ban too).
+
+    The entry goes first, with its "release" event (the panel audits the Unblock itself, with who asked): fail2ban's
+    unbanip runs the action's unban, which then finds no entry and writes no event of its own. Prints
+    released=yes when the address has no entry and no jail bans it afterwards (an address already lifted
+    included: Unblock is idempotent), released=no otherwise.
+    """
     ip = args[0]
     entry = _web_deny_entries().get(ip)
     if entry is not None and _web_deny_remove(ip):

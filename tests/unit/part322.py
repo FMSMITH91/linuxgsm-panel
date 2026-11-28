@@ -311,6 +311,44 @@ def _s4_unblock(st):
        (still["ok"], [ok for _a, ok in still["audit"]]), (False, [False]))
 
 
+def _s6_ends(st):
+    """The helper names how each ban ended; the audit says it in words of its own for each."""
+    from panel.routes import websites_guard as _rg
+    d = _tf322.mkdtemp(prefix="lgsm-unit-p322-ends-")
+    seams, _proxy = _tree322(d, [], lambda argv: (0, ""))
+    try:
+        now = int(_time322.time())
+        for ip, until in (("192.0.2.61", now - 30), ("192.0.2.62", now + 600)):
+            with open(os.path.join(_H322.WEB_DENY_DIR, ip), "w", encoding="ascii") as fh:
+                fh.write(_H322.web_guard_entry_text("lgsm-web-login", now - 600, until, "nowhere.example.org"))
+        _quiet322(_H322.do_website_guard_unban, ["192.0.2.61", "lgsm-web-login"], "")
+        _quiet322(_H322.do_website_guard_unban, ["192.0.2.62", "lgsm-web-login"], "")
+        with open(os.path.join(_H322.WEB_DENY_DIR, "192.0.2.63"), "w", encoding="ascii") as fh:
+            fh.write(_H322.web_guard_entry_text("lgsm-web-scan", now, now + 600, "nowhere.example.org"))
+        _quiet322(_H322.do_website_guard_flush, ["lgsm-web-scan"], "")
+        _p9_patch(_sw322, "_helper", _host_helper322)
+        with open(_H322.WEB_GUARD_EVENTS, encoding="ascii") as fh:
+            kinds = [e[2] for e in _H322.web_guard_events_after(fh.read().splitlines(), 0)]
+        _rg._set_cursor(st.host.id, 0)
+        start = _db322.session.query(_db322.func.max(_Audit322.id)).scalar() or 0
+        _rg.read(st.host)
+        details = [a.detail for a in _Audit322.query.filter(_Audit322.id > start, _Audit322.action == "website_unban")
+                   .order_by(_Audit322.id)]
+    finally:
+        seams.restore()
+        _shutil322.rmtree(d, ignore_errors=True)
+    eq("blocked visitors (helper website-guard-unban/flush): a ban that ran its time is an unban, one lifted on the "
+       "host before its end a lift, a jail stopping or restarting a flush", kinds, ["unban", "lift", "flush"])
+    eq("blocked visitors (the audit of the host's ban events): each way a ban ended is said in its own words",
+       [("unblocked: its ban ended" in x, "before its ban ended" in x, "stopped or restarted" in x) for x in details],
+       [(True, False, False), (False, True, False), (False, False, True)])
+    eq("blocked visitors (the action fail2ban runs): a jail that stops or restarts flushes its entries in one call "
+       "(actionflush), so fail2ban does not unban them one by one as if each ban had ended",
+       _re322.findall(r"^action(flush|stop) = (.*)$", _H322.WEB_GUARD_ACTION_TEXT, _re322.M),
+       [("stop", "/usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>"),
+        ("flush", "/usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>")])
+
+
 # ── 5. A change of the jails' actions restarts those jails ─────────────────────────────────────────
 # ── 7. An apply refusal in plain words ─────────────────────────────────────────────────────────────
 _CADDY_RAW322 = ('Error: loading initial config: loading new config: setting up custom log \'lgsmsec3_0\': opening log '
@@ -548,7 +586,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

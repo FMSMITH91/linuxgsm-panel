@@ -29,7 +29,10 @@ from panel.services import websites_guard as _wg
 
 CURSOR_KEY = "websites_guard_seq"
 S_NOT_BLOCKED = "That address is not blocked on this website."
-_KINDS = {"ban": "website_ban", "unban": "website_unban", "flush": "website_unban"}
+# The helper's event kinds: a ban ended by its time (unban), lifted on the host before its time (lift: fail2ban's unbanip
+# by hand), every ban of a jail lifted at once (flush: the jail stopped or restarted). The panel's own Unblock is a
+# "release", audited by its route with who asked.
+_KINDS = {"ban": "website_ban", "unban": "website_unban", "lift": "website_unban", "flush": "website_unban"}
 
 
 def _when(epoch):
@@ -67,7 +70,11 @@ def _event_detail(kind, ip, jail, host, at):
         return "%s blocked: %s, on %s, at %s" % (ip, label, host, _when(at))
     if kind == "flush":
         # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
-        return "every address the %s jail held was unblocked (the jail stopped), at %s" % (jail, _when(at))
+        return ("every address the %s jail held was unblocked: the jail stopped or restarted (a restart blocks the "
+                "addresses whose ban is still running again), at %s" % (jail, _when(at)))
+    if kind == "lift":
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
+        return "%s unblocked on the host before its ban ended (fail2ban was told to lift it), at %s" % (ip, _when(at))
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
     return "%s unblocked: its ban ended, at %s" % (ip, _when(at))
 
