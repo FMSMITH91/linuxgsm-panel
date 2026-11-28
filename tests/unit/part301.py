@@ -434,7 +434,7 @@ _INST301 = {"success": True, "site": {"id": 5, "state": "creating"},
             "install": {"state": "failed", "error": "The download's checksum did not match.",
                         "steps": [{"key": "account", "state": "undone"}, {"key": "download", "state": "failed"},
                                   {"key": "fetch-<i>x</i>", "label": "<i>x</i>", "state": "pending"}]}}
-_inst301 = _ran301('install', _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+_inst301 = _ran301('install', _node301(_list_sa301, _COMMON301 + ["secret_field.js", "websites.js"], r"""
   window.wsOpenAdd();
   $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
   $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
@@ -456,9 +456,10 @@ eq("node: the progress view labels the recipe's steps in plain words, leaves a s
    "says why the install failed",
    (_inst301.get("labels"), "checksum did not match" in (_inst301.get("result") or "")),
    ([["Create the site account", False], ["Download and check the app", False], ["<i>x</i>", True]], True))
-eq("node: the generated password is shown once, as text, and the form and its Create button give way to the steps",
+eq("node: the generated password is shown once, masked until Show (part330), and the form and its Create button "
+   "give way to the steps",
    (_inst301.get("password"), _inst301.get("formHidden"), _inst301.get("footerHidden"), _inst301.get("passField")),
-   ("Gen-erated-0ne", True, True, ""))
+   ("••••••••••••", True, True, ""))
 
 _INI_SCN301 = r"""
   const t = function (s) { return WS.iniProblems(s).map(function (p) { return [p.line, p.problem]; }); };

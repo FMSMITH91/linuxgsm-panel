@@ -21,6 +21,8 @@
 5. Reset password through the route: the app's settings first, then the database, then the site's database must
    answer the new password, then it is stored; each failure puts the old password back where it was changed; a
    database no app uses gets the warning and its new password in the no-store answer; a Node.js app's variable.
+6. The install dialog (Add a website: Install an app, js/websites.js in node): a generated admin password is drawn
+   masked like every stored secret.
 
 HOW IT RUNS. The routes through part12's app (its tripwire armed, so nothing reaches a host), the host's shell
 answered here; the page's scripts in node over the rendered markup (part301's harness, with timers, listeners and
@@ -596,6 +598,51 @@ def _s5_env_app(st):
        (True, [("db", _NEW330)], [{"DB_PASS": _NEW330, "OTHER": "x"}], _NEW330, True))
 
 
+# ── 6. the install dialog (Add a website: Install an app, js/websites.js) ──────────────────────────
+_LIST330 = {"success": True, "sites": [], "missing": [], "php_versions": ["8.4"], "runtimes": {"node": ["22"]},
+            "hosts": [{"id": 4, "name": "h"}], "customers": [],
+            "apps": [{"key": "wordpress", "name": "WordPress", "version": "7.1.5"}]}
+_FILL330 = r"""
+  window.wsOpenAdd();
+  $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
+  $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+  $('ws-add-admin-user').value = 'boss'; $('ws-add-admin-email').value = 'boss@example.org';
+"""
+_SCN_MADE330 = _FILL330 + r"""
+  const made = '%s';
+  window.wsAddSubmit({preventDefault: function () {}});
+  for (let i = 0; i < 8; i++) await tick();
+  const box = $('ws-result'), show = box.querySelector('button[aria-pressed]');
+  const masked = box.textContent;
+  box.querySelectorAll('button')[1].fire('click');
+  for (let i = 0; i < 4; i++) await tick();
+  show.fire('click');
+  for (let i = 0; i < 4; i++) await tick();
+  const shown = box.textContent, pressed = show.getAttribute('aria-pressed');
+  const hide = timers.filter(function (t) { return t[0] && t[1] === 30000; });
+  if (hide.length) hide[0][0]();
+  return {masked: masked.indexOf(made) >= 0, dots: masked.indexOf('••••••••••••') >= 0, copies: copies,
+          shown: shown.indexOf(made) >= 0, pressed: pressed, hides: hide.length, after: box.textContent.indexOf(made) >= 0};
+""" % _MADE330
+
+
+def _install_page330():
+    return _page301("websites.html", P9_ADMIN, can_add=True, site_admin=True)
+
+
+def _s6_install_made():
+    routes = {"/api/websites": _LIST330, "/websites/install-app": {"success": True, "id": 5, "password": _MADE330},
+              "/api/websites/5": {"success": True, "site": {"id": 5, "state": "running", "enabled": False},
+                                  "install": {"state": "done", "steps": []}, "can": {"admin": False}}}
+    got = _node330(_install_page330(), ["websites_common.js", "secret_field.js", "websites.js"], _SCN_MADE330, routes)
+    check("install dialog (node): the harness ran", "error" not in got, got.get("error"))
+    eq("install dialog (Install an app, no password typed): the generated admin password is drawn as twelve dots, not "
+       "in the page's text; Copy copies it without showing it; Show shows it, aria-pressed; it hides again after 30 "
+       "seconds (it was printed as plain text)",
+       tuple(got.get(k) for k in ("masked", "dots", "copies", "shown", "pressed", "hides", "after")),
+       (False, True, [_MADE330], True, "true", 1, False))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup330():
     _db330.session.rollback()
@@ -626,7 +673,7 @@ def _ran330(step, *args):
 
 
 _ran330.last = ""
-for _sec330 in (_s1_step_text, _s2_page, _s3_site_pages, _s3_game_tab, _s3_manager, _s4_rewriter):
+for _sec330 in (_s1_step_text, _s2_page, _s3_site_pages, _s3_game_tab, _s3_manager, _s4_rewriter, _s6_install_made):
     check("part330: %s ran to the end" % _sec330.__name__, _ran330(_sec330), _ran330.last)
 _trips330 = len(_P9_TRIPPED)
 with _p9.app_context():

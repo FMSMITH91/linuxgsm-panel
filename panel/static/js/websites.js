@@ -271,12 +271,13 @@
     if (password) showPassword(password);
     pollOnce();
   }
+  // The generated password, masked like every stored secret (js/secret_field.js): dots until Show, Copy without
+  // showing it, hidden again by itself.
   function showPassword(password) {
     var box = WS.el('ws-result');
     var p = WS.node('div', 'alert alert-info py-2 px-2 small mb-2');
     p.appendChild(WS.node('div', 'fw-semibold', WS.T('The app admin password, shown only this once:')));
-    var code = WS.raw('code', 'ws-secret user-select-all', password);
-    p.appendChild(code);
+    p.appendChild(window.secretField({value: password}));
     box.appendChild(p);
   }
   function pollOnce() {
