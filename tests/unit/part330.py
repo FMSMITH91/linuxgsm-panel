@@ -470,6 +470,7 @@ def _s4_rewriter():
         eq("reset password (rewriter, control: the settings do not hold the current password): refused, file unchanged",
            (again, open(wp, encoding="utf-8").read() == wp_text), ((35, "SITE_DBPW_NOT_FOUND"), True))
         if os.geteuid() != 0:
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, this part's scratch folder
             os.chmod(os.path.dirname(dr), 0o700)
         os.remove(dr)
         os.symlink(wp, dr)
@@ -478,6 +479,7 @@ def _s4_rewriter():
     finally:
         for root, dirs, _files in os.walk(home):
             for d in dirs:
+                # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only, this part's scratch folder
                 os.chmod(os.path.join(root, d), 0o700)
         _shutil330.rmtree(home, ignore_errors=True)
 
