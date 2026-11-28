@@ -56,7 +56,7 @@ jobs:
       pull-requests: read   # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -219,7 +219,7 @@ jobs:
       pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -321,7 +321,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Bandit results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -336,7 +336,7 @@ jobs:
       pull-requests: read      # the scope step lists the pull request's files
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -518,7 +518,7 @@ jobs:
         run: python3 .github/scripts/code_scanning_analyses.py still-head --sha "${GITHUB_SHA}"
       - name: Upload Semgrep results to code scanning
         if: steps.scope.outputs.docs_only != 'true' && steps.still_head.outputs.current != 'false'
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
