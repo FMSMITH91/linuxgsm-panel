@@ -67,6 +67,11 @@ def values_for(site, db=None, admin=None, domains=()):
 
     `db` = {"name", "user", "password", "host", "port"} (the Databases code's new database; host as
     the container sees it, 127.0.0.1, port 3306); `admin` = {"user", "email", "password", "site_name"}.
+    A site in a folder (Website.base_path, "/forums") has it in its address ({site_url}, https://<domain>/forums),
+    as {base_path} ("/forums"; "/" at a domain's root: phpBB's script_path) and as {cookie_path} ("/forums/", "/"):
+    each app's cookies are set to its folder (OWASP Session Management Cheat Sheet, "Domain and Path Attributes":
+    Path as narrow as possible), which keeps them apart by name and path only, never from another app of the same
+    domain (website_folders, THE SHARED ORIGIN).
     """
     from panel.services import websites_proxy as _wp
     admin, db = dict(admin or {}), dict(db or {})
@@ -79,6 +84,13 @@ def values_for(site, db=None, admin=None, domains=()):
     return out
 
 
+def _folder_of(site):
+    """The site's folder ("/forums") when it is one validation would store, else "" (the domain's root)."""
+    from panel.core.validation import website_folder
+    path = getattr(site, "base_path", "") or ""
+    return path if isinstance(path, str) and website_folder(path) == path else ""
+
+
 def _db_values(db):
     host, port = db.get("host", "127.0.0.1"), db.get("port", 3306)
     return {"db_name": db.get("name", ""), "db_user": db.get("user", ""), "db_password": db.get("password", ""),
@@ -87,9 +99,11 @@ def _db_values(db):
 
 def _site_values(site, admin, names):
     domain = names[0] if names else ""
-    return {"site_name": admin.get("site_name", site.name), "site_url": "https://%s" % domain if domain else "",
-            "domain": domain, "admin_user": admin.get("user", ""), "admin_email": admin.get("email", ""),
-            "admin_password": admin.get("password", ""),
+    folder = _folder_of(site)
+    url = "https://%s%s" % (domain, folder) if domain else ""
+    return {"site_name": admin.get("site_name", site.name), "site_url": url, "domain": domain,
+            "base_path": folder or "/", "cookie_path": folder + "/", "admin_user": admin.get("user", ""),
+            "admin_email": admin.get("email", ""), "admin_password": admin.get("password", ""),
             "trusted_hosts": ", ".join("'^%s$'" % re.escape(d).replace("\\-", "-") for d in names)}
 
 
@@ -375,7 +389,7 @@ def _verify_sh(account, site, step, values, token):
         body.append("%s < /dev/null > /dev/null 2>&1 || %s; " % (_shell_words(args), fail % "tables"))
     if "page" in step:
         page = step["page"]
-        url = "http://127.0.0.1:%d%s" % (int(site.port), page["path"])
+        url = _loopback(int(site.port), page["path"], values)
         # As the web proxy sends it: the site's name and https (an app that forces https answers the page).
         body.append("c=$(curl -s --max-time 60 -o \"$d/page\" -w '%%{http_code}' -H @\"$d/token\" -H %s "
                     "-H 'X-Forwarded-Proto: https' %s); "
@@ -383,6 +397,11 @@ def _verify_sh(account, site, step, values, token):
                     % (_q("Host: %s" % (values.get("domain") or "localhost")), _q(url), _q(page["expect"]), fail % "page"))
     body.append("echo verify=done")
     return "".join(body), "".join(line + "\n" for line in lines)
+
+
+def _loopback(port, path, values):
+    """The site's loopback URL of an app's own `path`, under its folder as the web proxy sends it (values' base_path)."""
+    return "http://127.0.0.1:%d%s%s" % (port, values.get("base_path", "/").rstrip("/"), path)
 
 
 def _qd(word):
@@ -413,7 +432,7 @@ def _page_sh(i, page, values, host, port):
             "-H", "@$d/token", "-o", "$d/page"]
     if page["method"] == "POST":
         args += _field_args(page["form"], values) or ["--data", ""]
-    url = "http://127.0.0.1:%d%s" % (port, page["path"])
+    url = _loopback(port, page["path"], values)
     return ("%s || { echo SITE_STEP_FAILED; echo page=%d; exit 30; }; " % (" ".join(_qd(a) for a in args + [url]), i + 1)
             + "grep -qF -- %s \"$d/page\" || { echo SITE_STEP_FAILED; echo page=%d; exit 31; }; "
             % (_q(page["expect"]), i + 1))
@@ -446,9 +465,9 @@ def _permissions_sh(site, step, recipe, token):
     if recipe.get("installer_path"):
         stdin = "%s: %s\n" % (_ws.GATE_HEADER, token)
         lines.append("h=$(mktemp) || exit 1; trap 'rm -f \"$h\"' EXIT; cat > \"$h\"; "
-                     "c=$(curl -s -o /dev/null -w '%%{http_code}' --max-time 30 -H @\"$h\" http://127.0.0.1:%d%s); "
+                     "c=$(curl -s -o /dev/null -w '%%{http_code}' --max-time 30 -H @\"$h\" %s); "
                      "[ \"$c\" = 404 ] || { echo SITE_INSTALLER_LEFT; echo code=$c; exit 32; }; "
-                     % (int(site.port), recipe["installer_path"]))
+                     % _q(_loopback(int(site.port), recipe["installer_path"], {"base_path": _folder_of(site) or "/"})))
     lines.append("echo permissions=done")
     return "".join(lines), stdin
 

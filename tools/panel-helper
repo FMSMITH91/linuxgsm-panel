@@ -3757,6 +3757,10 @@ WEB_SECURITY_LOG = WEB_LOG_DIR + "/security.log"
 WEB_DENY_DIR = WEB_PROXY_ETC + "/deny"
 WEB_GUARD_NEVER = WEB_PROXY_ETC + "/guard-never"
 WEB_GUARD_JAILS = {"lgsm-web-login": "login", "lgsm-web-scan": "scan"}
+# The site a ban was made on, as the entries and events name it: its domain, and its folder when it lives in one
+# (example.org/forums; the proxy tags a watched request of a site in a folder with lgsm_folder).
+WEB_GUARD_SITE = r"[a-z0-9.-]{1,253}(?:/[a-z0-9_-]{1,63}){0,8}"
+WEB_GUARD_FOLDER = r"(?:/[a-z0-9_-]{1,63}){1,8}"
 WEB_F2B_DIR = "/etc/fail2ban"
 WEB_GUARD_JAIL_FILE = "/etc/fail2ban/jail.d/lgsm-web.conf"
 WEB_GUARD_FILTER_FILE = "/etc/fail2ban/filter.d/%s.conf"
@@ -4026,23 +4030,31 @@ def _web_never(ip):
 
 
 def web_guard_host(lines, ip, tag):
-    """The site name (Host) of the newest security log line from `ip` among `lines` that the jail counted, or "-".
+    """The site (Host, and its folder) of the newest security log line from `ip` among `lines` the jail counted, or "-".
 
     Counted: tagged `tag` (the jail's, WEB_GUARD_JAILS), as its filter matches. A refused request of a banned visitor
-    (untagged) on another site, or a line the other jail counts, never names the site of this ban.
+    (untagged) on another site, or a line the other jail counts, never names the site of this ban. A line of a site in
+    a folder carries the folder (lgsm_folder): the site is then host/folder.
     """
     needle, counted = '"client_ip":"%s"' % ip, '"lgsm":"%s"' % tag
     for line in reversed(lines):
         if needle not in line or counted not in line:
             continue
         try:
-            host = str(json.loads(line).get("request", {}).get("host") or "")
+            entry = json.loads(line)
+            host = str(entry.get("request", {}).get("host") or "")
         except (ValueError, AttributeError):
             continue
         host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
         if re.fullmatch(r"[a-z0-9.-]{1,253}", host.lower()):
-            return host.lower()
+            return host.lower() + web_guard_folder(entry)
     return "-"
+
+
+def web_guard_folder(entry):
+    """The folder a security log line of a site in a folder carries (lgsm_folder, "/forums"), or "" (none, or odd)."""
+    folder = str(entry.get("lgsm_folder") or "")
+    return folder if len(folder) <= 64 and re.fullmatch(WEB_GUARD_FOLDER, folder) else ""
 
 
 def _web_log_tail():
@@ -4065,7 +4077,7 @@ def web_guard_events_after(lines, after):
     out = []
     for line in lines:
         m = re.fullmatch(r"([0-9]{1,12}) ([0-9]{1,12}) (ban|unban|lift|release|flush) ([0-9a-f:.]{2,45}|-) "
-                         r"(lgsm-web-login|lgsm-web-scan|-) ([a-z0-9.-]{1,253})", line.strip())
+                         r"(lgsm-web-login|lgsm-web-scan|-) (%s)" % WEB_GUARD_SITE, line.strip())
         if m and int(m.group(1)) > after:
             out.append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4), m.group(5), m.group(6)))
     return out
@@ -4189,8 +4201,8 @@ def _web_deny_modes(gid):
 
 def web_guard_entry(text):
     """{jail, at, until, host} of one deny list file's text, or None when it is not one the helper wrote."""
-    m = re.fullmatch(r"jail=(lgsm-web-login|lgsm-web-scan) at=([0-9]{1,12}) until=([0-9]{1,12}) host=([a-z0-9.-]{1,253})\n?",
-                     text or "")
+    m = re.fullmatch(r"jail=(lgsm-web-login|lgsm-web-scan) at=([0-9]{1,12}) until=([0-9]{1,12}) host=(%s)\n?"
+                     % WEB_GUARD_SITE, text or "")
     if not m:
         return None
     return {"jail": m.group(1), "at": int(m.group(2)), "until": int(m.group(3)), "host": m.group(4)}

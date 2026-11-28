@@ -195,7 +195,10 @@
   window.wsDomainTyped = function () {
     var name = WS.el('ws-add-name'), dom = WS.el('ws-add-domain');
     if (!name || !dom || name.dataset.typed === '1') return;
-    var label = dom.value.trim().toLowerCase().replace(/^www\./, '').split('.')[0] || '';
+    // In a folder (example.org/forums): the folder's last part names the site.
+    var typed = dom.value.trim().toLowerCase(), cut = typed.indexOf('/');
+    var folder = cut >= 0 ? typed.slice(cut + 1).split('/').filter(Boolean).pop() || '' : '';
+    var label = folder || typed.replace(/^www\./, '').split('.')[0] || '';
     name.value = trimHyphens(label.replace(/[^a-z0-9-]/g, '')).slice(0, 32);
   };
   // `text` without its leading and trailing hyphens (an index scan, not a backtracking pattern).

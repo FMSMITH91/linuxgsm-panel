@@ -1,0 +1,19 @@
+{
+  "Add a folder on a domain you already have": "Añadir una carpeta en un dominio que ya tienes",
+  "Folder": "Carpeta",
+  "Add folder": "Añadir carpeta",
+  "OWASP recommends a separate subdomain for each app (forums.example.org), so browsers keep each app's sign-ins and data apart. A folder shares its domain with the other apps on it.": "OWASP recomienda un subdominio distinto para cada aplicación (forums.example.org), para que los navegadores mantengan separados los inicios de sesión y los datos de cada una. Una carpeta comparte su dominio con las demás aplicaciones que hay en él.",
+  "Add a domain to one of your websites on this host first.": "Primero añade un dominio a uno de tus sitios web en este servidor.",
+  "In a folder of a domain one of your websites has: type the folder after the domain, like example.org/forums. OWASP recommends a separate subdomain for each app instead (forums.example.org), so browsers keep each app's sign-ins and data apart.": "En una carpeta de un dominio que ya tiene uno de tus sitios web: escribe la carpeta después del dominio, como example.org/forums. OWASP recomienda en su lugar un subdominio distinto para cada aplicación (forums.example.org), para que los navegadores mantengan separados los inicios de sesión y los datos de cada una.",
+  "That address is already used by a website.": "Esa dirección ya la usa un sitio web.",
+  "Add the domain to one of your websites first: a folder goes on a domain one of your websites has.": "Primero añade el dominio a uno de tus sitios web: una carpeta va en un dominio que ya tiene uno de tus sitios web.",
+  "That domain is served by a website on another host. Sites in folders of a domain share one host.": "Ese dominio lo sirve un sitio web de otro servidor. Los sitios en carpetas de un dominio comparten un mismo servidor.",
+  "Another website on {domain} is in {folder}: a folder may not hold, or be inside, another website's folder.": "Otro sitio web de {domain} está en {folder}: una carpeta no puede contener la carpeta de otro sitio web ni estar dentro de ella.",
+  "Every address of a website is in the same folder. This website's addresses are at {where}.": "Todas las direcciones de un sitio web están en la misma carpeta. Las direcciones de este sitio web están en {where}.",
+  "This app keeps the address it was installed with in its own settings, so it does not move into a folder. Choose the folder when you install an app.": "Esta aplicación guarda en su propia configuración la dirección con la que se instaló, así que no se mueve a una carpeta. Elige la carpeta al instalar una aplicación.",
+  "the root of their domains": "la raíz de sus dominios",
+  "Shares {domain} with your other apps: browsers do not keep their sign-ins apart. A subdomain ({sub}) does.": "Comparte {domain} con tus otras aplicaciones: los navegadores no mantienen separados sus inicios de sesión. Un subdominio ({sub}) sí.",
+  "A folder is lowercase letters, digits, - and _ after the domain and a /, like example.org/forums, at most 64 characters.": "Una carpeta son letras minúsculas, dígitos, - y _ después del dominio y una /, como example.org/forums, con 64 caracteres como máximo.",
+  "Type the folder the website lives in, like forums.": "Escribe la carpeta en la que está el sitio web, como forums.",
+  "The address was added, but the website's own server could not be set up for the folder: {why}": "La dirección se añadió, pero el servidor propio del sitio web no se pudo preparar para la carpeta: {why}"
+}

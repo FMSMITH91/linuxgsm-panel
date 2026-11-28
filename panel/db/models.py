@@ -1990,8 +1990,7 @@ _LIGHT_MIGRATIONS = {
     # signs out every remember-me login the first time they idle for an afternoon. New rows
     # never see this default: every insert goes through the ORM, which always supplies the
     # real value.
-    ("user_session", "remember"):
-        "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
+    ("user_session", "remember"): "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
     # NULL on upgrade: every database made before is on its game host's own server.
     ("game_database", "endpoint_id"): "ALTER TABLE game_database ADD COLUMN endpoint_id INTEGER",
     ("game_database", "account_host"): "ALTER TABLE game_database ADD COLUMN account_host VARCHAR(45)",
@@ -2016,6 +2015,9 @@ _LIGHT_MIGRATIONS = {
     ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
     # The defaults on upgrade (blocking on): websites_guard.settings fills every key an empty object lacks.
     ("website_proxy", "guard"): "ALTER TABLE website_proxy ADD COLUMN guard TEXT DEFAULT '{}'",
+    # Empty on upgrade: every address was a whole domain before folders. The table is then rebuilt once without its
+    # one-site-per-domain UNIQUE (WebsiteDomain's rebuild_when).
+    ("website_domain", "path"): "ALTER TABLE website_domain ADD COLUMN path VARCHAR(64) DEFAULT '' NOT NULL",
 }
 
 

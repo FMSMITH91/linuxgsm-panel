@@ -16,7 +16,7 @@ from panel.core.validation import (WEBSITE_ACCOUNT_RE, WEBSITE_ALLOW_PRESETS, WE
                                    WEBSITE_PHP_VERSION_RE, WEBSITE_PORT_MAX, WEBSITE_PORT_MIN,
                                    WEBSITE_RUNTIME_RE, WEBSITE_RUNTIME_VERSION_RE, WEBSITE_STATES,
                                    WEBSITE_TUNNEL_PROVIDERS, website_cidr, website_domain,
-                                   website_name_problem)
+                                   website_folder, website_name_problem)
 from panel.db.sqla import db
 
 # Association table: group -> websites (panel/services/websites_access.py). THE tenant concept: a
@@ -223,9 +223,35 @@ class Website(db.Model):
         rows = list(self.domains or [])
         return next((d for d in rows if d.is_primary), rows[0] if rows else None)
 
+    @property
+    def base_path(self):
+        """The folder the site lives in ("/forums"), or "" at the root of its domains: every address has the same one."""
+        dom = self.primary_domain
+        return dom.path if dom is not None and dom.path else ""
+
+
+def domain_unique_alone(conn, name):
+    """Whether table `name` still has a UNIQUE index on its `domain` column alone (one site per domain, before folders).
+
+    WebsiteDomain's `rebuild_when`: panel/db/id_sequence.py rebuilds the table from the model ONCE while it does
+    (SQLite cannot drop a constraint), so sites can share a domain in folders.
+    """
+    for row in conn.exec_driver_sql("PRAGMA index_list(%s)" % name).fetchall():
+        if not row[2]:
+            continue
+        cols = [r[2] for r in conn.exec_driver_sql("PRAGMA index_info(\"%s\")" % row[1].replace('"', '""')).fetchall()]
+        if cols == ["domain"]:
+            return True
+    return False
+
 
 class WebsiteDomain(db.Model):
-    """One domain a website serves. `domain` is globally unique: no two sites, on any host, share one.
+    """One address a website serves: a domain, and the folder of it the site lives in ("" for the whole domain).
+
+    (domain, path) is globally unique: no two sites, on any host, share an address. A domain may be held by several
+    sites of one host, at most one at its root and the others each in a folder none of the others' folders holds
+    (website_folders checks that, and that every address of a site has the same folder: the site's app is told one
+    base path).
 
     Held to validation.website_domain here as well as in the routes, so no path can store an IP
     literal, a wildcard or a reserved name. dns_state / cert_state are what the last check found
@@ -237,11 +263,14 @@ class WebsiteDomain(db.Model):
     """
 
     __tablename__ = "website_domain"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (db.UniqueConstraint("domain", "path", name="uq_website_domain_address"),
+                      {"sqlite_autoincrement": True, "info": {"rebuild_when": domain_unique_alone}})
     id = db.Column(db.Integer, primary_key=True)
     website_id = db.Column(db.Integer, db.ForeignKey("website.id", ondelete="CASCADE"),
                            nullable=False, index=True)
-    domain = db.Column(db.String(253), unique=True, nullable=False)
+    domain = db.Column(db.String(253), nullable=False)
+    # The folder ("/forums"; validation.website_folder), "" for the whole domain.
+    path = db.Column(db.String(64), nullable=False, default="", server_default="")
     is_primary = db.Column(db.Boolean, default=False, nullable=False)
     verified_at = db.Column(db.DateTime, nullable=True)
     last_check_at = db.Column(db.DateTime, nullable=True)
@@ -264,9 +293,20 @@ class WebsiteDomain(db.Model):
             raise ValueError("%s must be a lowercase public domain name, got %r" % (key, value))
         return value
 
+    @validates("path")
+    def _v_path(self, key, value):
+        if value is None or website_folder(value) != value:
+            raise ValueError("%s must be '' or a folder like /forums, got %r" % (key, value))
+        return value
+
     @validates("cert_mode")
     def _v_cert_mode(self, key, value):
         return _website_choice(key, value, ("acme", "own", "site"))
+
+    @property
+    def address(self):
+        """The address as visitors type it: the domain, and its folder when it has one (example.org/forums)."""
+        return (self.domain or "") + (self.path or "")
 
 
 class WebsiteProxy(db.Model):
@@ -385,3 +425,4 @@ def site_certs_from_domains():
         for d in doms:
             if d.own_cert_pem == pem:
                 d.cert_mode, d.own_cert_pem, d.own_key_secret = "site", "", ""
+

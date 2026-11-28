@@ -389,8 +389,12 @@ WP_URL_MARK = "WP_URL_SET"
 
 
 def wp_address_sh(account, domain):
-    """Shell (as the account) setting WordPress's home and siteurl to https://<domain> in its running container."""
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", domain or ""):
+    """Shell (as the account) setting WordPress's home and siteurl to https://<domain> in its running container.
+
+    `domain` is the site's address: a domain, and its folder for a site in one (example.org/forums).
+    """
+    head, slash, tail = (domain or "").partition("/")
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", head) or (slash and _base("/" + tail) != "/" + tail):
         raise ValueError("not a domain")
     url = "https://%s" % domain
     code = ("define('WP_USE_THEMES', false); require '%s/wp-load.php'; "
@@ -418,17 +422,35 @@ def _token(token):
     return token
 
 
-def nginx_conf(token, upstream_port=None):
-    """The static site's (or a runtime app's gate's) nginx server block, refusing requests without `token`."""
+def _base(base):
+    """A site's folder ("/forums") as validation stores it, "" for none; anything else is refused."""
+    from panel.core.validation import website_folder
+    if base and website_folder(base) != base:
+        raise ValueError("a site's folder is like /forums")
+    return base or ""
+
+
+def nginx_conf(token, upstream_port=None, base=""):
+    """The static site's (or a runtime app's gate's) nginx server block, refusing requests without `token`.
+
+    A static site in a folder (`base`, "/forums") is served there too: the web proxy keeps the folder in the path
+    (websites_proxy, SITES IN FOLDERS), and an alias maps it to the site's files. A runtime app is passed the whole
+    path: it is told its folder on its Domains tab.
+    """
     _token(token)
+    base = _base(base)
     lines = ["# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
              "server {", "    listen %d;" % INNER_PORT, "    server_name _;", "    server_tokens off;",
              "    absolute_redirect off;", "    client_max_body_size 0;",
              '    if ($http_x_panel_proxy_token != "%s") {' % token, "        return 403;", "    }"]
     if upstream_port is None:
         lines += ["    root %s;" % DOCROOT["static"], "    index index.html index.htm;",
-                  "    location ~ /\\. {", "        deny all;", "    }",
-                  "    location / {", "        try_files $uri $uri/ =404;", "    }"]
+                  "    location ~ /\\. {", "        deny all;", "    }"]
+        if base:
+            lines += ["    location = %s {" % base, "        return 301 %s/;" % base, "    }",
+                      "    location %s/ {" % base, "        alias %s/;" % DOCROOT["static"].rstrip("/"),
+                      "        try_files $uri $uri/ =404;", "    }"]
+        lines += ["    location / {", "        try_files $uri $uri/ =404;", "    }"]
     else:
         lines += ["    location / {", "        proxy_pass http://127.0.0.1:%d;" % int(upstream_port),
                   "        proxy_http_version 1.1;", "        proxy_set_header %s \"\";" % GATE_HEADER,
@@ -440,16 +462,24 @@ def nginx_conf(token, upstream_port=None):
     return "\n".join(lines + ["}", ""])
 
 
-def apache_conf(token):
-    """The PHP kinds' Apache config: 8080, the token checked after every .htaccess, then removed before PHP."""
+def apache_conf(token, base=""):
+    """The PHP kinds' Apache config: 8080, the token checked after every .htaccess, then removed before PHP.
+
+    A site in a folder (`base`, "/forums") is also served there, by an Alias to its files: the web proxy keeps the
+    folder in the path (websites_proxy, SITES IN FOLDERS), so the app sees the address the browser asked for, its
+    .htaccess rewrites under it (Apache 2.4.16 and later need no RewriteBase for an Alias), and PHP's SCRIPT_NAME
+    names it.
+    """
     _token(token)
+    base = _base(base)
+    alias = ["    Alias %s %s" % (base, DOCROOT_PHP)] if base else []
     return "\n".join([
         "# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
         "Listen %d" % INNER_PORT, "ServerName localhost", "ServerTokens Prod", "ServerSignature Off", "TraceEnable Off",
         "<IfModule !headers_module>", "    LoadModule headers_module /usr/lib/apache2/modules/mod_headers.so",
         "</IfModule>", "<IfModule !rewrite_module>",
         "    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so", "</IfModule>",
-        "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
+        "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP] + alias + [
         # The gate before authorization and before any .htaccess (THE PROXY TOKEN): [NV] keeps the header's name
         # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here. The <If> below reads
         # it with req_novary() for the same reason: %{HTTP:...} in an expression adds the header's name to Vary, and
@@ -1003,7 +1033,7 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     if site.kind == "wordpress":
         files.update(cron_units())
     if site.kind == "static":
-        files[CONF + "/nginx.conf"] = nginx_conf(token)
+        files[CONF + "/nginx.conf"] = nginx_conf(token, base=getattr(site, "base_path", ""))
     elif site.kind == "app":
         from panel.services import websites_catalog as _wc
         files[CONF + "/nginx.conf"] = nginx_conf(token, site.app_port)
@@ -1012,7 +1042,7 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
         files[CONF + "/build.sh"] = build_script(site)
         files[CONF + "/app.env"] = env_file(site)
     else:
-        files[CONF + "/apache.conf"] = apache_conf(token)
+        files[CONF + "/apache.conf"] = apache_conf(token, getattr(site, "base_path", ""))
         files[CONF + "/ports.conf"] = APACHE_PORTS
         files[CONF + "/php.ini"] = php_ini(site)
         if uses_wpcli(site):

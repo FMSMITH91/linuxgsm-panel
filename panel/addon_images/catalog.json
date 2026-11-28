@@ -286,7 +286,7 @@
                   "bburl": "{site_url}",
                   "contactemail": "{admin_email}",
                   "cookiedomain": "{domain}",
-                  "cookiepath": "/",
+                  "cookiepath": "{cookie_path}",
                   "pin": "",
                   "websitename": "{site_name}",
                   "websiteurl": "{site_url}"
@@ -355,7 +355,7 @@
           {
             "dest": "install/panel-install.yml",
             "escape": "yaml",
-            "template": "installer:\n    admin:\n        name: \"{admin_user}\"\n        password: \"{admin_password}\"\n        email: \"{admin_email}\"\n    board:\n        lang: en\n        name: \"{site_name}\"\n        description: \"{site_name}\"\n    database:\n        dbms: mysqli\n        dbhost: \"{db_host_name}\"\n        dbport: {db_port}\n        dbuser: \"{db_user}\"\n        dbpasswd: \"{db_password}\"\n        dbname: \"{db_name}\"\n        table_prefix: phpbb_\n    email:\n        enabled: false\n    server:\n        cookie_secure: true\n        server_protocol: https://\n        force_server_vars: false\n        server_name: \"{domain}\"\n        server_port: 443\n        script_path: /\n    extensions: []\n",
+            "template": "installer:\n    admin:\n        name: \"{admin_user}\"\n        password: \"{admin_password}\"\n        email: \"{admin_email}\"\n    board:\n        lang: en\n        name: \"{site_name}\"\n        description: \"{site_name}\"\n    database:\n        dbms: mysqli\n        dbhost: \"{db_host_name}\"\n        dbport: {db_port}\n        dbuser: \"{db_user}\"\n        dbpasswd: \"{db_password}\"\n        dbname: \"{db_name}\"\n        table_prefix: phpbb_\n    email:\n        enabled: false\n    server:\n        cookie_secure: true\n        server_protocol: https://\n        force_server_vars: false\n        server_name: \"{domain}\"\n        server_port: 443\n        script_path: \"{base_path}\"\n    extensions: []\n",
             "type": "render-config"
           },
           {
@@ -376,6 +376,17 @@
               "install"
             ],
             "type": "set-permissions"
+          },
+          {
+            "argv": [
+              "php",
+              "bin/phpbbcli.php",
+              "config:set",
+              "cookie_path",
+              "{cookie_path}"
+            ],
+            "image": "site",
+            "type": "run-in-container"
           },
           {
             "files": [
@@ -499,6 +510,15 @@
               "install_2-1_mysql.sql"
             ],
             "type": "set-permissions"
+          },
+          {
+            "argv": [
+              "php",
+              "-r",
+              "require 'Settings.php'; $m = new mysqli($db_server, $db_user, $db_passwd, $db_name, empty($db_port) ? 3306 : (int) $db_port); if (! $m->query(\"REPLACE INTO \" . $db_prefix . \"settings (variable, value) VALUES ('localCookies', '1')\")) { exit(1); }"
+            ],
+            "image": "site",
+            "type": "run-in-container"
           },
           {
             "files": [
