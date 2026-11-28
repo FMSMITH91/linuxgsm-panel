@@ -30,6 +30,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **One certificate for the whole website.** Paste your own certificate once on the site's Domains tab and
   every domain it covers uses it, including ones you add later; the others stay automatic, with the reason
   shown.
+- **Game updates are on the Updates page.** Each game server shows when a newer build of its game is out, with
+  Update now (players are warned in chat first) or Update when empty. Steam games update by themselves at
+  night when nobody is on; Minecraft and a few others stay manual by default, because a new release can lock
+  out players on older versions, and the page says why.
 
 ### Changed
 
