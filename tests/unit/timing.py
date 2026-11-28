@@ -85,20 +85,24 @@ class PartClock:
         """Write the times file and print the summary block; nothing when timing is off."""
         if not self.path:
             return None
-        data = {"ms": {r[0]: r[1] for r in self.rows}, "rss_mb": {r[0]: r[2] for r in self.rows},
-                "procs": {r[0]: r[3] for r in self.rows}, "cpu_ms": {r[0]: r[4] for r in self.rows},
-                "load1": {r[0]: r[5] for r in self.rows}}
+        keys = ("ms", "rss_mb", "procs", "cpu_ms", "load1")
+        data = {k: {r[0]: r[i + 1] for r in self.rows} for i, k in enumerate(keys)}
         with open(self.path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=1, sort_keys=True)
         out = out or sys.stdout
-        total = sum(r[1] for r in self.rows)
         print("\n" + SUMMARY_HEAD, file=out)
-        for part, ms, mb, procs, cpu, load in sorted(self.rows, key=lambda r: (-r[1], r[0]))[:TOP]:
-            print("  %-8s %8d %8d %6d %8s %6s" % (part, ms, cpu, mb, "?" if procs is None else procs,
-                                                "?" if load is None else "%.1f" % load), file=out)
-        print("  %d parts, %.1f s in all, %.1f s of CPU" % (len(self.rows), total / 1000.0,
+        for row in sorted(self.rows, key=lambda r: (-r[1], r[0]))[:TOP]:
+            print(_row_text(row), file=out)
+        print("  %d parts, %.1f s in all, %.1f s of CPU" % (len(self.rows), sum(r[1] for r in self.rows) / 1000.0,
                                                           sum(r[4] for r in self.rows) / 1000.0), file=out)
         return data
+
+
+def _row_text(row):
+    """One part's line of the summary block: wall ms, CPU ms, peak MB, processes started, load."""
+    part, ms, mb, procs, cpu, load = row
+    return "  %-8s %8d %8d %6d %8s %6s" % (part, ms, cpu, mb, "?" if procs is None else procs,
+                                         "?" if load is None else "%.1f" % load)
 
 
 def weights_from(times, about):

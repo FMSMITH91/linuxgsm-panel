@@ -2248,17 +2248,16 @@ def _r26d_pin_helper(part):
 # per-run gates below judge what this process ran; the gates that read the whole suite (the ordering
 # notes, the import order, every part file in _PARTS, the shards owning each part once) run in the
 # unsplit run and in shard 1 only (_whole_check), so the shards together run each of them once.
-_RUN_PARTS = _shard.RUN = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
-_clock = importlib.import_module("unit.timing").PartClock(os.environ)   # UNIT_PART_TIMES=<file>: time each part
+# UNIT_SELECT cuts that to the parts a change can affect (tests/unit/impact.py); shard.run_part imports
+# each one under UNIT_PART_TIMES' clock and UNIT_IMPACT_RECORD's recorder, both off when unset.
+_RUN_PARTS = _shard.RUN = _shard.start(_SHARD, _PARTS, _root, os.environ)
 for _part in _RUN_PARTS:
     _path_before = list(sys.path)
     _r26d_pin_helper(_part)
     # Again before each part: part05 reinstalls nosudo_runner's shim over every module's subprocess,
     # and that replaced this answer for the rest of the run.
     _r16d_wrap_ts_handles()
-    _clock.start(_part)
-    importlib.import_module("unit." + _part)
-    _clock.stop()
+    _shard.run_part(_part)
     _hub_after.append((_part, _hub_leftovers()))
     if (tempfile.mkdtemp is not _r15d_tracked_mkdtemp or tempfile.mkstemp is not _r15d_tracked_mkstemp
             or tempfile._mkstemp_inner is not _r16d_tracked_mkstemp_inner):
@@ -2274,7 +2273,6 @@ for _part in _RUN_PARTS:
               if os.path.realpath(_p).startswith(os.path.join(os.path.realpath(_root), "tools"))]
     if set(sys.path) != set(_path_before) or _ahead:
         _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
-_clock.report()
 # What the LAST part left, which no pin after it reads (review 1016f lead).
 _r29d_last_left = tuple(getattr(sys.modules.get(_m), "_HELPER_STATE", {}).get("present", "not loaded")
                         for _m in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"))
