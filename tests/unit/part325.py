@@ -74,17 +74,41 @@ check("part clock: unset, it records, writes and prints nothing; set, it writes 
       and _said325.getvalue().count(_tm325.SUMMARY_HEAD) == 1 and "2 parts" in _said325.getvalue(),
       repr((_out325.getvalue(), _times325, _said325.getvalue()))[:600])
 
-# The runner times every part: the clock starts right before each part's import and stops right after it,
-# and reports once, after the loop.
-_loop325 = _RUNNER325[_RUNNER325.index("\nfor _part in _RUN_PARTS:"):]
+# The runner times every part: shard.start arms the clock, the loop imports each part through
+# shard.run_part, which starts the clock right before the import and stops it right after, and the
+# run's last part reports.
+_loop325 = _RUNNER325[_RUNNER325.index("\n_RUN_PARTS = "):]
 _loop325 = _loop325[:_loop325.index("\n_r29d_last_left")]
-_body325 = [ln.strip() for ln in _loop325.splitlines()]
-_imp325 = _body325.index('importlib.import_module("unit." + _part)')
-check("runner: each part's import is timed (the clock starts just before it and stops just after it), and the "
-      "times are reported once, after the last part",
-      "_clock.start(_part)" in _body325[_imp325 - 2:_imp325] and "_clock.stop()" in _body325[_imp325 + 1:_imp325 + 3]
-      and _body325.count("_clock.report()") == 1 and _body325.index("_clock.report()") > _imp325
-      and "\n_clock.report()\n" in _loop325, repr(_body325[_imp325 - 3:_imp325 + 4]))
+_calls325 = []
+
+
+class _Watch325:
+    """A stand-in clock and recorder: each call is recorded with the part's import state."""
+
+    def __init__(self, who):
+        self.who = who
+
+    def __getattr__(self, name):
+        return lambda *a: _calls325.append((self.who, name, a))
+
+
+_was_watch325, _was_run325 = list(_sh325._WATCH), _sh325.RUN
+try:
+    _sh325._WATCH[:] = [_Watch325("clock"), _Watch325("rec")]
+    _sh325.RUN = ("part01", "part15")
+    _sh325.run_part("part01")          # imported already: the import changes nothing
+    _mid325 = list(_calls325)
+    _sh325.RUN = ("part02", "part01")
+    _sh325.run_part("part01")
+finally:
+    _sh325._WATCH[:], _sh325.RUN = _was_watch325, _was_run325
+check("runner: each part is imported through shard.run_part, under the clock (started just before the import, "
+      "stopped just after) and the recorder; the run's last part reports the times and saves the record",
+      "\n_RUN_PARTS = _shard.RUN = _shard.start(_SHARD, _PARTS, _root, os.environ)" in _loop325
+      and "\n    _shard.run_part(_part)\n" in _loop325 and 'importlib.import_module("unit." + _part)' not in _loop325
+      and [c[:2] for c in _mid325] == [("clock", "start"), ("rec", "start"), ("rec", "stop"), ("clock", "stop")]
+      and [c[:2] for c in _calls325[len(_mid325):]][-2:] == [("clock", "report"), ("rec", "save")],
+      repr(_calls325)[:400])
 
 _run_step325 = _wf_run_block(_CI325, "Run all checks (compile, lint, unit, smoke, shellcheck)")
 _root_step325 = _wf_run_block(_CI325, "Run the root-only unit checks, as root")

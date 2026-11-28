@@ -11,9 +11,11 @@ shard that needs it, which costs time but never loses a check.
 The owners are chosen to even out the shards' time, from the measured seconds per part in
 shard_weights.json (milliseconds, whole numbers: the plan is computed separately in every shard's
 process, so it must not depend on float rounding or on set order, which PYTHONHASHSEED changes).
-A part with no measurement counts FALLBACK_MS. Nothing here imports the panel or eventlet.
+A part with no measurement counts FALLBACK_MS. Nothing here imports the panel or eventlet, but run_part
+imports each part, which does.
 """
 import ast
+import importlib
 import json
 import os
 import re
@@ -169,11 +171,42 @@ def run_parts(shard, parts, graph, selected=None):
 
 
 SELECTED = None
+RUN = ()      # the runner's run list (tests/unit_test.py sets it from start())
+_WATCH = []   # (the part clock, the impact recorder) of this run, set by start()
+
+
+def start(shard, parts, root, environ):
+    """The parts this run imports (run_parts), with UNIT_SELECT's selection; arms the clock and the recorder.
+
+    UNIT_PART_TIMES (tests/unit/timing.py) and UNIT_IMPACT_RECORD (tests/unit/impact.py) each do
+    nothing when unset. With UNIT_SELECT set, the run says first what it selected and why.
+    """
+    graph = import_graph(parts, root)
+    selected, why = _impact().from_env(environ, parts, graph, root)
+    run = run_parts(shard, parts, graph, selected)
+    if (environ.get("UNIT_SELECT") or "").strip():
+        print("unit selection: %s (%s)" % ("every part" if selected is None else "%d of %d parts" % (len(run), len(parts)),
+                                           why))
+    timing = importlib.import_module((__package__ + ".timing") if __package__ else "timing")
+    _WATCH[:] = [timing.PartClock(environ), _impact().Recorder(environ, root)]
+    return run
+
+
+def run_part(part):
+    """Import `part` (which runs its checks) under the clock and the recorder; after the run's last part, report."""
+    clock, rec = _WATCH
+    clock.start(part)
+    rec.start(part)
+    importlib.import_module("unit." + part)
+    rec.stop()
+    clock.stop()
+    if RUN and part == RUN[-1]:
+        clock.report()
+        rec.save()
 
 
 def _impact():
     """tests/unit/impact.py, imported the way this module was (unit.impact under the runner)."""
-    import importlib  # pylint: disable=import-outside-toplevel
     return importlib.import_module((__package__ + ".impact") if __package__ else "impact")
 
 
