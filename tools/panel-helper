@@ -4010,8 +4010,8 @@ def do_website_guard_ban(args, content):
         return 1
     now = int(time.time())
     host = web_guard_host(_web_log_tail(), ip)
-    entry = "jail=%s at=%d until=%d host=%s\n" % (jail, now, now + int(bantime), host)
-    _web_write(os.path.join(WEB_DENY_DIR, ip), entry.encode(), WEB_FILE_ROOT)    # stat needs no read
+    entry = web_guard_entry_text(jail, now, now + int(bantime), host)
+    _web_deny_write(ip, entry.encode(), pwd.getpwnam(WEB_PROXY_USER).pw_gid)
     _web_guard_event("ban", ip, jail, host)
     sys.stdout.write("ban=yes\n")
     return 0

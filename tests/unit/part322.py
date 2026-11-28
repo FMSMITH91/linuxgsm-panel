@@ -350,6 +350,35 @@ def _s6_ends(st):
 
 
 # ── 5. A change of the jails' actions restarts those jails ─────────────────────────────────────────
+def _s5_restart():
+    d = _tf322.mkdtemp(prefix="lgsm-unit-p322-f2b-")
+    calls = []
+    seams, proxy = _tree322(d, [], lambda argv: calls.append(argv[1:]) or (0, ""))
+    try:
+        steps = {}
+        for name, guard in (("first", _GUARD322), ("public", dict(_GUARD322, firewall=True)),
+                            ("same", dict(_GUARD322, firewall=True)), ("restricted", _GUARD322)):
+            del calls[:]
+            _quiet322(_H322._web_guard_apply, dict(guard), proxy)
+            steps[name] = list(calls)
+        with open(_H322.WEB_GUARD_ACTION_FILE, "w", encoding="utf-8") as fh:
+            fh.write(_H322.WEB_GUARD_ACTION_TEXT.replace("actionflush", "# actionflush"))      # an older helper's
+        del calls[:]
+        _quiet322(_H322._web_guard_apply, dict(_GUARD322), proxy)
+        steps["upgrade"] = list(calls)
+    finally:
+        seams.restore()
+        _shutil322.rmtree(d, ignore_errors=True)
+    both = [["reload"], ["reload", "--restart", "--if-exists", "lgsm-web-login"],
+            ["reload", "--restart", "--if-exists", "lgsm-web-scan"]]
+    eq("blocked visitors (helper website-proxy-apply, Restricted <-> Public): the website jails whose actions changed "
+       "are restarted after the reload (a reload keeps a running jail's actions, so the firewall ban never came or "
+       "went), and an updated action file restarts them too; nothing else is restarted",
+       (steps["public"], steps["restricted"], steps["upgrade"]), (both, both, both))
+    eq("blocked visitors (helper, control: the first apply and the same settings again): fail2ban is reloaded only",
+       (steps["first"], steps["same"]), ([["reload"]], [["reload"]]))
+
+
 # ── 7. An apply refusal in plain words ─────────────────────────────────────────────────────────────
 _CADDY_RAW322 = ('Error: loading initial config: loading new config: setting up custom log \'lgsmsec3_0\': opening log '
                  'writer using &logging.FileWriter{Filename:"/var/log/lgsm-web-proxy/security.log", Mode:0x180, '
@@ -578,7 +607,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir, _s3_deny_modes, _s8_blocked_page):
+for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_blocked_page):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():
