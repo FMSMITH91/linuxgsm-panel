@@ -110,6 +110,8 @@
   "Whether one of its scheduled tasks updates LinuxGSM is not read yet: its Scheduled tasks card says. Until then it waits for Update now.": "On ne sait pas encore si l'une de ses tâches planifiées met LinuxGSM à jour : sa carte Tâches planifiées le dit. D'ici là, il attend Mettre à jour maintenant.",
   "WordPress may reach the two more WordPress.org addresses its Site Health and background updates need.": "WordPress peut joindre les deux adresses WordPress.org de plus dont ont besoin sa Santé du site et ses mises à jour en arrière-plan.",
   "WordPress's Site Health reads the web proxy's own page cache (a page cache it found nothing of before).": "La Santé du site de WordPress lit le cache de pages du proxy web (il n'en trouvait aucun avant).",
+  "Pretty links, robots.txt and the REST API keep working after WordPress's Permalinks settings are saved (they answered \"Not Found\").": "Les permaliens, robots.txt et l'API REST continuent de fonctionner après l'enregistrement des réglages des permaliens de WordPress (ils répondaient « Not Found »).",
+  "A redirect its server makes keeps the visitor's https address instead of naming the server's inside port.": "Une redirection faite par son serveur garde l'adresse https du visiteur au lieu de nommer le port interne du serveur.",
   "WordPress's Site Health says when the panel has not reported its page cache yet, instead of calling it off.": "La Santé du site de WordPress indique quand le panneau n'a pas encore signalé son cache de pages, au lieu de le dire désactivé.",
   "You can't change that.": "Vous ne pouvez pas modifier cela.",
   "You don't manage anything that has updates.": "Vous ne gérez rien qui ait des mises à jour.",

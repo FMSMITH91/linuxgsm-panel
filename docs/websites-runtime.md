@@ -26,6 +26,10 @@ checked first in the server's own rewrite rules, before the site's `.htaccess` i
 (`ErrorDocument 403 /index.php`, written by a plugin or by hand) can no longer turn a refused request into one that
 runs PHP. The token is made once, with the site, and no action changes it. Neither check names the token's
 header in the answer's `Vary` header (a visitor sees only the `Vary` values Apache and the site set themselves).
+A WordPress site's server also sends a path that is no file or folder to `index.php` on its own, whatever the
+site's `.htaccess` holds, so saving WordPress's Permalinks settings can never leave its pretty links, `robots.txt`
+or the REST API answering "Not Found"; the panel's plugin in the site also tells WordPress that its server rewrites
+addresses, so the rules WordPress writes into `.htaccess` are complete.
 
 A site has no route to the internet. WordPress reaches only the hosts its own update and Site Health checks use
 (api.wordpress.org, downloads.wordpress.org, downloads.w.org for background updates, and developer.wordpress.org,

@@ -10,7 +10,9 @@
    folder without its slash answered with a 308 to it (reconcile_proxy, every exposure mode).
 4. The guard maps a ban to the site by domain and folder (the helper's lgsm_folder, the routes' Blocked list).
 5. The apps and the sites' own servers under a folder: each recipe's base URL and cookie path, Apache's Alias,
-   nginx's alias, the installer's loopback paths; no redirect a site's own server builds names its inside port.
+   nginx's alias, the installer's loopback paths; no redirect a site's own server builds names its inside port;
+   WordPress's unknown paths reach its index.php without its .htaccess, its plugin says its server rewrites URLs,
+   and a site on an older revision of its files is offered the Update that brings them.
 6. The pages: the site's address, Open site, the Domains tab's folder form and its OWASP note, es/fr.
 
 HOW IT RUNS. Through part12's app (its tripwire armed): routes by the test client with the host calls stubbed, the
@@ -527,6 +529,53 @@ def _s5_redirects(host):
        {"p331rs": (True, True), "p331ra": (True, True)})
 
 
+def _s5_permalinks(host, su):
+    """WordPress's pretty links without its .htaccess (a Permalinks save wrote an empty block: every pretty link 404)."""
+    import base64 as _b64
+    wp = _site331(host, "p331pw", kind="wordpress", address="pw." + _DOM331, php_version="8.4", app_recipe="wordpress")
+    wpf = _site331(host, "p331pf", kind="wordpress", address="pw.%s/blog" % _DOM331, php_version="8.4",
+                   app_recipe="wordpress")
+    bb = _site331(host, "p331pb", kind="php", address="pb." + _DOM331, php_version="8.4", app_recipe="phpbb")
+    own = _site331(host, "p331po", kind="php", address="po." + _DOM331, php_version="8.4")
+    ids, image = (1000, 1000), "x/n@sha256:" + "7" * 64
+    dirs = {}
+    for s in (wp, wpf, bb, own):
+        conf = _ws331.site_files(s, ids, "none", _TOKEN331, image=image)[_ws331.CONF + "/apache.conf"]
+        d = conf[conf.index("    <Directory /var/www/html>"):conf.index("    </Directory>")]
+        dirs[s.name] = [ln.strip() for ln in d.split("\n") if "FallbackResource" in ln]
+    eq("WordPress's own server, as the install writes it: a path that is no file or folder goes to its index.php "
+       "whatever its .htaccess holds (FallbackResource, under its folder for a site in one); phpBB and a PHP site of "
+       "the person's own keep Apache's 404 (control)", dirs,
+       {"p331pw": ["FallbackResource /index.php"], "p331pf": ["FallbackResource /blog/index.php"], "p331pb": [],
+        "p331po": []})
+    sh = _ws331.loopback_sh()
+    plugin = _b64.b64decode(sh.split()[-1].strip("'; ")).decode("utf-8")
+    eq("WordPress's plugin, as the install writes it (loopback_sh): it tells WordPress its server rewrites URLs, so a "
+       "Permalinks save writes its rules into .htaccess", ("add_filter( 'got_rewrite', '__return_true' );" in plugin,
+                                                          "add_filter( 'got_url_rewrite', '__return_true' );" in plugin),
+       (True, True))
+    _s5_permalinks_update(su, wp, bb)
+
+
+def _s5_permalinks_update(su, wp, bb):
+    """A site installed with an older revision of its files is offered the Update that brings them, saying what."""
+    real = "localhost/lgsm-site-p331:8.4"
+    _p9_patch(_ws331, "image_for", lambda s: real)
+    got = {}
+    for s in (wp, bb):
+        row = _db331.session.get(_Site331, s.id)
+        row.state, row.image_digest, row.image_key = "running", real, "files-7"
+        _db331.session.commit()
+        _w331.forget_status(s.id)
+        img = ((_p9_json(_client331(su.id).get("/api/websites/%d" % s.id)).get("site") or {}).get("image") or {})
+        got[s.name] = (img.get("update_available"), "Pretty links, robots.txt and the REST API keep working" in
+                       (img.get("ready") or ""), "keeps the visitor's https address" in (img.get("ready") or ""))
+    eq("Update (GET /api/websites/<id>, a site installed with main's files-7): a WordPress site is offered Update and "
+       "told it brings pretty links that survive a Permalinks save and redirects that keep https; a phpBB site is told "
+       "only the redirects (control)", (_ws331.SITE_FILES_REV, got),
+       ("files-10", {"p331pw": (True, True, True), "p331pb": (True, False, True)}))
+
+
 # ── 6. The pages ─────────────────────────────────────────────────────────────────────────────────
 def _s6_pages(host, su):
     forum = _db331.session.get(_Site331, _site_id331("p331forum"))
@@ -611,7 +660,8 @@ with _p9.app_context():
                                   (_s4_helper, ()), (_s4_routes, (_host331, _su331)), (_s5_recipes, (_host331,)),
                                   (_s5_servers, (_host331,)), (_s6_pages, (_host331, _su331)), (_s6_i18n, ()),
                                   (_s3_bare, (_remote331("p331-bare", "198.51.100.33"),)),
-                                  (_s5_redirects, (_remote331("p331-redir", "198.51.100.34"),))):
+                                  (_s5_redirects, (_remote331("p331-redir", "198.51.100.34"),)),
+                                  (_s5_permalinks, (_remote331("p331-perma", "198.51.100.35"), _su331))):
             check("part331: %s ran to the end" % _sec331.__name__, _ran331(_sec331, *_args331), _ran331.last)
         eq("part331: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips331:], [])
     finally:

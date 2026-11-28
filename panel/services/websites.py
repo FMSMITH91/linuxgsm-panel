@@ -106,8 +106,11 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
 # 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary. 7: WordPress's
 # loopback plugin reports the web proxy's own page cache state in Site Health (PAGE_CACHE_FILE). 8: with no such file
-# yet, Site Health says the panel has not reported it, instead of calling the page cache off.
-SITE_FILES_REV = "files-8"
+# yet, Site Health says the panel has not reported it, instead of calling the page cache off. 9: Apache names the
+# visitor's https address in the redirects it builds itself, never its inside port (http://<domain>:8080/...). 10:
+# WordPress's unknown paths go to its index.php without its .htaccess (FallbackResource), and its loopback plugin tells
+# it its server rewrites URLs: a Permalinks save that wrote an empty .htaccess block left every pretty link answering 404.
+SITE_FILES_REV = "files-10"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -462,17 +465,23 @@ def nginx_conf(token, upstream_port=None, base=""):
     return "\n".join(lines + ["}", ""])
 
 
-def apache_conf(token, base=""):
+def apache_conf(token, base="", front=False):
     """The PHP kinds' Apache config: 8080, the token checked after every .htaccess, then removed before PHP.
 
     A site in a folder (`base`, "/forums") is also served there, by an Alias to its files: the web proxy keeps the
     folder in the path (websites_proxy, SITES IN FOLDERS), so the app sees the address the browser asked for, its
     .htaccess rewrites under it (Apache 2.4.16 and later need no RewriteBase for an Alias), and PHP's SCRIPT_NAME
     names it.
+
+    `front` (WordPress): a path that is no file or folder goes to the site's index.php (FallbackResource), whatever
+    its .htaccess holds. WordPress writes its pretty links' rules into .htaccess when its Permalinks settings are
+    saved, and a save that wrote an empty block left every pretty link, robots.txt and the REST API answering
+    Apache's 404. Its own rules, when there, still run first (mod_rewrite before mod_dir).
     """
     _token(token)
     base = _base(base)
     alias = ["    Alias %s %s" % (base, DOCROOT_PHP)] if base else []
+    fallback = ["        FallbackResource %s/index.php" % base] if front else []
     return "\n".join([
         "# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
         "Listen %d" % INNER_PORT, "ServerName localhost", "ServerTokens Prod", "ServerSignature Off", "TraceEnable Off",
@@ -495,7 +504,7 @@ def apache_conf(token, base=""):
         "    RewriteCond %{ENV:REDIRECT_PANEL_GATE} =1", "    RewriteRule ^ - [E=PANEL_GATE:1]",
         "    RewriteCond %{ENV:PANEL_GATE} !=1", "    RewriteRule ^ - [F,NS]",
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
-        "        Require all granted", "    </Directory>",
+        "        Require all granted"] + fallback + ["    </Directory>",
         '    <Location "/">',
         "        <If \"req_novary('%s') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
         "            Require all denied", "        </If>", "    </Location>",
@@ -1049,7 +1058,7 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
         files[CONF + "/build.sh"] = build_script(site)
         files[CONF + "/app.env"] = env_file(site)
     else:
-        files[CONF + "/apache.conf"] = apache_conf(token, getattr(site, "base_path", ""))
+        files[CONF + "/apache.conf"] = apache_conf(token, getattr(site, "base_path", ""), site.kind == "wordpress")
         files[CONF + "/ports.conf"] = APACHE_PORTS
         files[CONF + "/php.ini"] = php_ini(site)
         if uses_wpcli(site):
@@ -1273,6 +1282,13 @@ function lgsm_panel_site_status_tests( $tests ) {
 	return $tests;
 }
 add_filter( 'site_status_tests', 'lgsm_panel_site_status_tests' );
+
+/*
+ * The site's server is Apache with mod_rewrite (the panel's own configuration), whatever WordPress detects from where
+ * it runs (wp-cli has no Apache to ask): a Permalinks save then writes its rules into .htaccess, never an empty block.
+ */
+add_filter( 'got_rewrite', '__return_true' );
+add_filter( 'got_url_rewrite', '__return_true' );
 """
 # The writer (python3 -I -c, as the account; arguments: the path inside ~/site/html, the file's text in base64). Each
 # folder on the path is made when missing and refused when it is a link; the file is written beside, then renamed.

@@ -233,6 +233,10 @@ def _addon_row(gs, k, seen, cfg, sec):
 # What each revision of a site's files (services/websites.SITE_FILES_REV) changes, for the kinds it changes; a site
 # behind on an older one, or on one that changes nothing it can see, reads the general line.
 FILES_NOTES = {
+    "files-10": (("wordpress",), "Pretty links, robots.txt and the REST API keep working after WordPress's Permalinks "
+                                 "settings are saved (they answered \"Not Found\")."),
+    "files-9": (("php", "wordpress", "phpbb"), "A redirect its server makes keeps the visitor's https address instead "
+                                               "of naming the server's inside port."),
     "files-8": (("wordpress",), "WordPress's Site Health says when the panel has not reported its page cache yet, "
                                 "instead of calling it off."),
     "files-7": (("wordpress",), "WordPress's Site Health reads the web proxy's own page cache (a page cache it found "
