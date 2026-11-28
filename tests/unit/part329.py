@@ -362,6 +362,28 @@ def _s4_software(st):
         'id="ws-ov-software"' in page), (False, False, False, False, True))
 
 
+def _s4_software_apps(st):
+    """A one-click app's line names the app by its recipe: a phpBB site said "PHP site · PHP 8.4" (its kind is php)."""
+    _p9_patch(_sw329, "site_probe", lambda remote, site: (False, "The website's host did not answer."))
+    _p9_patch(_sw329, "site_logs", lambda remote, site: (True, ""))
+    cases = (("p329-bb", "php", "phpbb", "3.3.19", "phpBB 3.3.19 · PHP 8.4"),
+             ("p329-dr", "php", "drupal", "11.4.14", "Drupal 11.4.14 · PHP 8.4"),
+             ("p329-my", "php", "mybb", "1.8.41", "MyBB 1.8.41 · PHP 8.4"),
+             ("p329-sm", "php", "smf", "2.1.8", "Simple Machines Forum 2.1.8 · PHP 8.4"),
+             ("p329-wr", "wordpress", "wordpress", "7.1.5", "WordPress 7.1.5 · PHP 8.4"))
+    got = []
+    for name, kind, recipe, version, _want in cases:
+        site = _site329(st, name, kind, app_recipe=recipe, app_version=version, php_version="8.4")
+        _w329._STATUS.clear()
+        got.append(((_get329("/api/websites/%d" % site.id).get_json(silent=True) or {}).get("site") or {}).get("software"))
+    eq("Overview (GET /api/websites/<id>, one-click apps): the software line names the app its recipe installed, with "
+       "the version the panel installed, then its PHP", got, [c[4] for c in cases])
+    plain = _site329(st, "p329-ph", "php", php_version="8.4")
+    _w329._STATUS.clear()
+    eq("Overview (control: a PHP site the person filled themselves names only its PHP)",
+       ((_get329("/api/websites/%d" % plain.id).get_json(silent=True) or {}).get("site") or {}).get("software"), "PHP 8.4")
+
+
 _OVERVIEW329 = r"""
   for (let i = 0; i < 4; i++) await tick();
   return {text: $('ws-ov-software').textContent, title: $('ws-ov-software').title};
@@ -454,7 +476,8 @@ with _p9.app_context():
         _ROWS329["remotes"].append(_r329.id)
         _st329 = {"remote": _r329.id}
         _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s3_perf_save, _s4_overview_js, _s5_guard_label)
-        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages, _s4_software, _s5_links)]
+        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages, _s4_software, _s4_software_apps,
+                                                             _s5_links)]
                                   + [(s, ()) for s in _plain329]):
             _err329 = _ran329(_sec329, *_args329)
             check("part329: %s ran to the end" % _sec329.__name__, not _err329, _err329)

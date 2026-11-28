@@ -358,19 +358,41 @@ def _image_ref(site, probe):
 
 # The Overview's Software line names what a person knows, each with its own version, never the image's name and hash.
 APP_NAMES = {"wordpress": "WordPress", "phpbb": "phpBB"}
+# The floor catalog's one-click apps by recipe, for a recipe the catalog in use no longer names.
+RECIPE_NAMES = {"drupal": "Drupal", "mybb": "MyBB", "phpbb": "phpBB", "smf": "Simple Machines Forum",
+                "wordpress": "WordPress"}
 S_STATIC_SOFTWARE = "Its files, served as they are"
 
 
-def software_line(site):
-    """The Overview's Software line: "WordPress 7.1.5 · PHP 8.4", "PHP 8.4", "Node.js 22" or a plain site's words.
+def app_name(site):
+    """The app a site runs, as people know it ("phpBB"), or "": its one-click recipe's name, else its kind's.
 
-    Each product names its own version, so a bare "Version 7.1.5" never leaves the reader guessing which one.
+    A one-click app's kind is the server it runs on ("php" for phpBB, Drupal, MyBB and SMF), so the kind alone said
+    "PHP site" for a forum.
+    """
+    recipe = getattr(site, "app_recipe", "") or ""
+    if recipe:
+        from panel.services import websites_catalog
+        try:
+            name = (websites_catalog.recipe(recipe) or {}).get("name")
+        except NotImplementedError:
+            name = None
+        return name if isinstance(name, str) and name else RECIPE_NAMES.get(recipe, recipe)
+    return APP_NAMES.get(site.kind, "")
+
+
+def software_line(site):
+    """The Overview's Software line: "phpBB 3.3.19 · PHP 8.4", "PHP 8.4", "Node.js 22" or a plain site's words.
+
+    Each product names its own version, so a bare "Version 7.1.5" never leaves the reader guessing which one. A
+    one-click app is named by its recipe with the version the panel installed or updated it to.
     """
     def named(product, version):
         return ("%s %s" % (product, version)).strip()
     parts = []
-    if site.kind in APP_NAMES:
-        parts.append(named(APP_NAMES[site.kind], site.app_version or ""))
+    app = app_name(site)
+    if app:
+        parts.append(named(app, site.app_version or ""))
     if site.kind in ("php", "wordpress", "phpbb") and site.php_version:
         parts.append(named("PHP", site.php_version))
     if site.kind == "app":
