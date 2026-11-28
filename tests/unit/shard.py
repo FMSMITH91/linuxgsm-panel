@@ -152,6 +152,31 @@ def shard_parts(shard, parts, root):
     return run_list(parts, graph, owned[shard[0] - 1])
 
 
+def run_parts(shard, parts, graph, selected=None):
+    """The parts this run imports: every one, or `shard`'s run list; cut to a selection (tests/unit/impact.py).
+
+    `selected` None runs them all. A shard keeps its plan, made from the whole suite, so each part is
+    still owned by the same shard whatever is selected; a shard none of whose parts is selected runs
+    its setup and part15 alone. SELECTED records the selection for the end-of-run gates.
+    """
+    global SELECTED
+    SELECTED = None if selected is None else frozenset(selected)
+    owned = None if shard is None else plan(parts, graph, load_weights(), shard[1])[shard[0] - 1]
+    run = list(parts) if shard is None else run_list(parts, graph, owned)
+    if selected is not None:
+        run = _impact().narrow(run, selected, graph, None if owned is None else set(owned))
+    return tuple(run)
+
+
+SELECTED = None
+
+
+def _impact():
+    """tests/unit/impact.py, imported the way this module was (unit.impact under the runner)."""
+    import importlib  # pylint: disable=import-outside-toplevel
+    return importlib.import_module((__package__ + ".impact") if __package__ else "impact")
+
+
 def whole_gate(check, shard):
     """(a check() that records only where this run holds the whole-suite gates, the names it recorded)."""
     ran = []
@@ -168,6 +193,8 @@ def _split_problems(parts, n, root, reached):
     graph = import_graph(parts, root)
     owned = plan(parts, graph, load_weights(), n)
     lists = [run_list(parts, graph, o) for o in owned]
+    if SELECTED is not None:
+        lists = [_impact().narrow(lst, SELECTED, graph, set(o)) for lst, o in zip(lists, owned)]
     flat = [p for o in owned for p in o]
     bad = sorted((set(parts[SETUP:]) - set(TAIL)) ^ set(flat)) + sorted({p for p in flat if flat.count(p) > 1})
     return bad + _lists_problems(parts, graph, lists) + _reader_problems(parts, graph, reached), lists
@@ -191,8 +218,10 @@ def end_gates(check, whole_check, whole_ran, shard, lists, root, reached):
     gate's import reader (_r16d_parts_reached), which the split's own reader must agree with.
     """
     parts, _run, on_disk = lists
-    if shard is None:
+    if shard is None and SELECTED is None:
         _unsplit_gate(check, parts, on_disk)
+    elif shard is None:
+        _selected_gate(check, parts, _run, on_disk)
     else:
         _shard_gates(check, whole_check, shard, lists, root, reached)
     # The whole-suite gates ran once each, here, exactly when this run holds them (the unsplit run, or shard 1).
@@ -211,12 +240,28 @@ def _unsplit_gate(check, parts, on_disk):
                                                 sorted(set(on_disk) ^ set(parts))))
 
 
+def _imported_parts():
+    """The unit.partNN modules this process imported, by part name."""
+    return sorted(m[len("unit."):] for m in sys.modules if re.fullmatch(r"unit\.part\d+", m))
+
+
+def _selected_gate(check, parts, run, on_disk):
+    """The unsplit run cut to a selection imported exactly its run list, and says what it left out."""
+    ran = _imported_parts()
+    check("unit suite: this run imported every part of its selection's run list, each from its own place in _PARTS, "
+          "and no other part; every tests/unit/part*.py is in _PARTS", bool(ran) and ran == sorted(run)
+          and bool(on_disk) and set(on_disk) == set(parts),
+          "never ran: %s; ran, not listed: %s; not in _PARTS: %s" % (
+              sorted(set(run) - set(ran)), sorted(set(ran) - set(run)), sorted(set(on_disk) ^ set(parts))))
+    print("\nunit selection: %d of %d parts: %s" % (len(run), len(parts), " ".join(run)))
+
+
 def _shard_gates(check, whole_check, shard, lists, root, reached):
     """A shard ran exactly its run list; once (shard 1), the split itself holds; and the run says which shard."""
     parts, run, on_disk = lists
     # Every part of the run list ran, and no part outside it was imported (one would have run inside
     # another part's import, out of order).
-    ran = sorted(m[len("unit."):] for m in sys.modules if re.fullmatch(r"unit\.part\d+", m))
+    ran = _imported_parts()
     check("unit suite: this shard imported every part of its run list, each from its own place in _PARTS, and no other part",
           bool(ran) and ran == sorted(run), "shard %d/%d; never ran: %s; ran, not listed: %s" % (
               shard + (sorted(set(run) - set(ran)), sorted(set(ran) - set(run)))))

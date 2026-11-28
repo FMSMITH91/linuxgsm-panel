@@ -2248,8 +2248,16 @@ def _r26d_pin_helper(part):
 # per-run gates below judge what this process ran; the gates that read the whole suite (the ordering
 # notes, the import order, every part file in _PARTS, the shards owning each part once) run in the
 # unsplit run and in shard 1 only (_whole_check), so the shards together run each of them once.
-_RUN_PARTS = _shard.RUN = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
+# UNIT_SELECT (tests/unit/impact.py) cuts that to the parts a change can affect, the setup and part15 kept.
+_impact = importlib.import_module("unit.impact")
+_r325_graph = _shard.import_graph(_PARTS, _root)
+_r325_selected, _r325_why = _impact.from_env(os.environ, _PARTS, _r325_graph, _root)
+_RUN_PARTS = _shard.RUN = _shard.run_parts(_SHARD, _PARTS, _r325_graph, _r325_selected)
+if os.environ.get("UNIT_SELECT", "").strip():   # unset, the run says nothing new
+    print("unit selection: %s (%s)" % ("every part" if _r325_selected is None else "%d of %d parts" % (len(_RUN_PARTS), len(_PARTS)),
+                                       _r325_why))
 _clock = importlib.import_module("unit.timing").PartClock(os.environ)   # UNIT_PART_TIMES=<file>: time each part
+_r325_rec = _impact.Recorder(os.environ, _root)   # UNIT_IMPACT_RECORD=<file>: what each part touches
 for _part in _RUN_PARTS:
     _path_before = list(sys.path)
     _r26d_pin_helper(_part)
@@ -2257,7 +2265,9 @@ for _part in _RUN_PARTS:
     # and that replaced this answer for the rest of the run.
     _r16d_wrap_ts_handles()
     _clock.start(_part)
+    _r325_rec.start(_part)
     importlib.import_module("unit." + _part)
+    _r325_rec.stop()
     _clock.stop()
     _hub_after.append((_part, _hub_leftovers()))
     if (tempfile.mkdtemp is not _r15d_tracked_mkdtemp or tempfile.mkstemp is not _r15d_tracked_mkstemp
@@ -2275,6 +2285,7 @@ for _part in _RUN_PARTS:
     if set(sys.path) != set(_path_before) or _ahead:
         _path_moved.append((_part, sorted(set(sys.path) ^ set(_path_before)) or _ahead))
 _clock.report()
+_r325_rec.save()
 # What the LAST part left, which no pin after it reads (review 1016f lead).
 _r29d_last_left = tuple(getattr(sys.modules.get(_m), "_HELPER_STATE", {}).get("present", "not loaded")
                         for _m in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"))
