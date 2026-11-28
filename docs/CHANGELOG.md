@@ -71,6 +71,9 @@ dated section below lists what that day's releases changed, newest first; the nu
   now tells each WordPress site its page cache state shortly after it starts and when its Performance settings
   are saved; until then Site Health says the state is not reported yet. WordPress sites are offered an Update
   for that new Site Health text.
+- **WordPress pretty links survive a Permalinks save.** Saving WordPress's Permalinks settings no longer turns
+  every page except the home page into "not found". Existing WordPress sites are offered an Update on their
+  Overview that fixes it.
 
 ## [2026.11.27] — 2026-11-27
 

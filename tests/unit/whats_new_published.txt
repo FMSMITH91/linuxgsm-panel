@@ -987,3 +987,4 @@ bc2e25ea Settings are shown open, never tucked away.
 27e8857c Websites can live in a folder of a domain.
 8ad0882f Database passwords are hidden until you press Show, and Reset password keeps the site working.
 e0a99f98 Reset a website app's admin password from the panel.
+6347571d WordPress pretty links survive a Permalinks save.
