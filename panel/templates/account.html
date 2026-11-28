@@ -90,9 +90,9 @@
         <i class="bi bi-arrow-counterclockwise"></i> Reset to the default order
       </button>
       {% if current_user.is_superadmin %}
-      {# A superadmin's two house-layout buttons, used once in a panel's life: folded under the
-         reset that every account uses. #}
-      {% call fold('Panel default layout', cls='mt-2') %}
+      {# A superadmin's two house-layout buttons, under the reset that every account uses; open like every
+         fold holding a control (js/fold_memory.js keeps a viewer's own close). #}
+      {% call fold('Panel default layout', cls='mt-2', open_=True, remember='acct-default-layout') %}
       <p class="text-secondary small mb-2">As a superadmin you can publish your arrangement as this panel's default, so new accounts — and anyone who resets — start from it instead of the built-in order.</p>
       <div class="d-flex gap-2 flex-wrap">
         <button class="btn btn-outline-primary btn-sm" data-action="publishDashLayout" data-args='["@self"]'
@@ -178,12 +178,13 @@
   </div>
 
   {% if current_user.is_owner %}
-  {# The panel owner only (panel/security/owner.py). Folded: it is used once in a panel's life, if
-     ever. The list is the route's own rule: active superadmins with 2FA on. #}
+  {# The panel owner only (panel/security/owner.py). Open like every fold holding a control (the owner may close
+     it, js/fold_memory.js); the transfer still asks for the password and a code. The list is the route's own
+     rule: active superadmins with 2FA on. #}
   <div class="card" id="sec-owner">
     <div class="card-header"><i class="bi bi-award-fill"></i> Panel owner</div>
     <div class="card-body">
-      {% call fold('Transfer ownership') %}
+      {% call fold('Transfer ownership', open_=True, remember='acct-transfer') %}
       <p class="text-secondary small mb-2">You own this panel: no other administrator can deactivate, demote, rename or delete your account, or reset its password or two-factor authentication.</p>
       {% if not current_user.totp_enabled %}
       <p class="text-secondary small mb-0">Turn on two-factor authentication first: a transfer of ownership is confirmed with your password and a code from your authenticator.</p>

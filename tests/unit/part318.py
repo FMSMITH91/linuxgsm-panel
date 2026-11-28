@@ -529,21 +529,22 @@ def _s3_card():
     got = _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
   for (let i = 0; i < 4; i++) await tick();
   const shown = {url: $('wp-url').value, sum: $('wp-url-sum').textContent, state: $('wp-url-state').textContent,
-                 nets: $('wp-url-nets').children.length, folded: $('wp-url-box').hasAttribute('open')};
+                 nets: $('wp-url-nets').children.length, opened: $('wp-url-box').hasAttribute('open')};
   $('wp-url').value = '  https://lists.example.org/b.txt ';
   const body = WS.exposureBody();
   $('wp-url').value = ''; const empty = WS.exposureBody();
   return {shown: shown, sent: body.allow_url, empty: empty.allow_url};
 """, routes={"/api/websites": dict(_LIST301, proxies=[base], options={})})
     shown = got.get("shown") or {}
-    eq("allow list from an address (card): folded with its count in the summary; open, the address, when it was read, "
+    eq("allow list from an address (card): drawn open (it holds a setting; part329) with its count in the summary, the "
+       "address, when it was read, "
        "the networks, why the last read failed (the old list kept) and that reading is switched off; the typed "
        "address is sent trimmed, an emptied box clears it",
-       (shown.get("url"), shown.get("sum"), shown.get("nets"), shown.get("folded"),
+       (shown.get("url"), shown.get("sum"), shown.get("nets"), shown.get("opened"),
         "Read on 2026-11-26: 2 networks." in (shown.get("state") or ""), "URLError" in (shown.get("state") or ""),
         "list read before is kept" in (shown.get("state") or ""), "turned off" in (shown.get("state") or ""),
         got.get("sent"), got.get("empty")),
-       ("https://lists.example.org/a.txt", "A list from an address: 2 networks", 2, False, True, True, True, True,
+       ("https://lists.example.org/a.txt", "A list from an address: 2 networks", 2, True, True, True, True, True,
         "https://lists.example.org/b.txt", ""))
 
 

@@ -350,11 +350,14 @@
     return wrap;
   }
 
-  // B3's settings, folded: geolocation and its plugins. Apply rewrites only those in b3.ini and restarts it.
+  // B3's settings: geolocation and its plugins, in a fold drawn open (settings are never tucked away); a viewer's own
+  // close of it is kept by fold_memory.js. Apply rewrites only those in b3.ini and restarts it.
   // B3's row also gets Players, before Remove: its players and penalties, read from its database (b3_players.js).
   function settingsFold(a, box, bar) {
     bar.insertBefore(button(T('Players'), 'bi-people', 'b3pOpen', []), bar.lastChild);
     var fold = node('details', 'mt-2');
+    fold.open = true;
+    fold.setAttribute('data-fold', 'ad-b3-settings');
     fold.appendChild(node('summary', 'small', T('B3 settings')));
     if (a.b3_card) B3S.alerts(a, fold);
     fold.appendChild(geoSelect(a, 'ad-set-geo-' + a.id, a.geolocation));
@@ -386,6 +389,7 @@
     fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
     fold.appendChild(node('div', 'small text-secondary', T('B3 checks the new settings before it uses them, and a refusal changes nothing. A change to plugin settings alone is reloaded without a restart; anything else restarts B3.')));
     box.appendChild(fold);
+    if (window.restoreFolds) window.restoreFolds(box);
   }
 
   // The operator's own plugins folder: off unless turned on; the warning sits beside the switch (Apply asks with it).

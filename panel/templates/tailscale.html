@@ -466,11 +466,12 @@
 {% endif %}
 
 {# The control server new joins use: Tailscale's own, or a self-hosted one (Headscale). Superadmin,
-   like /api/tailscale/control-server behind it. Folded and last: set once, so it moves nothing above it. #}
+   like /api/tailscale/control-server behind it. Open, like every fold holding a setting, and last, so it moves
+   nothing above it. #}
 {% if current_user.is_superadmin %}
 <div class="card mt-3" id="ts-control-card">
   <div class="card-body py-2">
-  {% call fold('Control server', id='ts-control-fold', icon='hdd-network') %}
+  {% call fold('Control server', id='ts-control-fold', icon='hdd-network', open_=True, remember='ts-control-fold') %}
     <p class="text-secondary small mb-2">
       The coordination server this panel's hosts join: Tailscale's own, or a self-hosted one such
       as Headscale. Connecting this host, and a remote's login link or auth key, use it. Leave it

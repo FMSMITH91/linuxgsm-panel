@@ -425,7 +425,8 @@ def _players_button273():
     prog = ("function node(){ return {appendChild: function(){}, setAttribute: function(){}}; }\n"
             "function button(label, icon, act){ return {act: act}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoSelect(){ return node(); }\n"
-            "function ownPlugins(){}\n" + _cut47(src, "function settingsFold(") + "\n"
+            "function ownPlugins(){}\nvar window = {};\n"    # settingsFold puts a viewer's own close back (restoreFolds)
+            + _cut47(src, "function settingsFold(") + "\n"
             "var bar = {kids: [{act: 'adAct'}, {act: 'adLog'}, {act: 'adRemove'}], insertBefore: function(n, ref){"
             " this.kids.splice(this.kids.indexOf(ref), 0, n); }};\n"
             "bar.lastChild = bar.kids[2];\n"
