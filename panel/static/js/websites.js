@@ -12,8 +12,7 @@
   // adminPass: an admin password the person typed, held here once Create has been sent (never written back into the
   // page), so a refused Create (no database server yet), a failed install and Try again all install with it.
   var st = {d: null, kind: 'static', app: '', poll: null, siteId: null, adminPass: ''};
-  var PAGE = WS.el('ws-page');
-  var FLAGS = PAGE ? PAGE.dataset : {};
+  var PAGE = WS.el('ws-page'), FLAGS = PAGE ? PAGE.dataset : {};
 
   function portsLine(p) {
     p = p || {};

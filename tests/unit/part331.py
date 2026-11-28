@@ -530,7 +530,7 @@ def _s5_redirects(host):
 
 
 def _s5_permalinks(host, su):
-    """WordPress's pretty links without its .htaccess (a Permalinks save wrote an empty block: every pretty link 404)."""
+    """Pretty links of WordPress without its .htaccess (a Permalinks save wrote an empty block: every one 404)."""
     import base64 as _b64
     wp = _site331(host, "p331pw", kind="wordpress", address="pw." + _DOM331, php_version="8.4", app_recipe="wordpress")
     wpf = _site331(host, "p331pf", kind="wordpress", address="pw.%s/blog" % _DOM331, php_version="8.4",
