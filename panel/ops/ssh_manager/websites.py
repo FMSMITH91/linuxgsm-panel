@@ -329,6 +329,20 @@ def site_probe(remote, site):
     return _as_site(remote, site.account, _ws().probe_sh(site.account, site), timeout=60)
 
 
+def recent_requests(remote, site):
+    """How many connections the web proxy holds open to the site now (its port on 127.0.0.1), or None when unread.
+
+    The proxy keeps an idle connection to a site open for a while after its last request (Caddy's reverse proxy
+    keep-alive, two minutes by default), so a count above 0 means the site answered a visitor in the last
+    minutes: the nightly window leaves it for the next night (services/updates_auto). Read with ss as the
+    site's account (sockets of the host's network are listed to any account), in the C locale.
+    """
+    ok, out = _as_site(remote, site.account, "LC_ALL=C ss -Htn state established '( sport = :%d )' | wc -l"
+                       % int(site.port), timeout=30)
+    words = (out or "").split()
+    return int(words[-1]) if ok and words and words[-1].isdecimal() else None
+
+
 WP_NOT_RUNNING = "The website is not running, so WordPress could not be told its new address. Start it, then try again."
 
 
@@ -395,13 +409,21 @@ def apply_doc(text, sites=(), proxy=None):
     tunnel = proxy is not None and proxy.exposure_mode == "tunnel"
     for site in () if tunnel else sites:
         for d in site.domains or []:
-            if _wp().own_cert(d):
-                files["%s.crt" % d.domain] = d.own_cert_pem
-                files["%s.key" % d.domain] = _secret(d.own_key_secret)
+            src = _wp().cert_source(d)
+            if src is not None and "%s.crt" % src[0] not in files:     # a site's one pair is sent once
+                files["%s.crt" % src[0]] = src[1]
+                files["%s.key" % src[0]] = _secret(src[2])
     if proxy is not None and proxy.origin_pull_mtls:
         from panel.services import websites_catalog as _wc
         files["origin-pull-ca.pem"] = _wc.origin_pull_ca("cloudflare")
-    return json.dumps({"caddyfile": text, "files": files})
+    return json.dumps({"caddyfile": text, "files": files, "guard": guard_doc(proxy)})
+
+
+def guard_doc(proxy):
+    """The guard's part of the apply (services/websites_guard.doc), with the panel's login whitelist never banned."""
+    from panel.core.config import load_config
+    from panel.services import websites_guard as _wg
+    return _wg.doc(proxy, list(load_config().get("security_whitelist", []) or []))
 
 
 def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
@@ -415,11 +437,41 @@ def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
     ok, out = _helper(remote, "website-proxy-apply", ["start" if start_it else "reload"], timeout=180,
                       doc=apply_doc(text, sites, proxy))
     if ok:
+        note_page_cache(remote, text, sites)
+        note_guard(remote, out)
         return True, OK_APPLIED
     if out in (ONLY_LOCAL, NO_HELPER):
         return False, out
-    _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-600:])
+    _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-2400:])     # detail= is the whole line
     return False, apply_refusal(out)
+
+
+# site id -> the page cache text last written into that WordPress site's files by this process.
+_PAGE_CACHE_NOTED = {}
+
+
+def note_page_cache(remote, text, sites):
+    """Write each WordPress site's page cache state, as the applied configuration `text` has it, into its files.
+
+    Site Health's page cache test reads it (the loopback plugin): WordPress's own test looks for caching headers on
+    requests that never pass the proxy. Written as the site's account (PAGE_CACHE_FILE, no secret), and only when it
+    changed since this process last wrote it. A write that fails is logged and the apply still stands: Site Health
+    then keeps the last word.
+    """
+    cached = _wp().cached_sites(text)
+    for site in sites:
+        if site.kind != "wordpress" or not site.account:
+            continue
+        value = _ws().page_cache_text(cached.get(site.id))
+        if _PAGE_CACHE_NOTED.get(site.id) == value:
+            continue
+        sh = _ws()._ENV + "umask 077; mkdir -p %s || exit 1; " % _ws()._q(_ws().RUN_DIR) + _ws().write_files_sh()
+        ok, _out = _as_site(remote, site.account, sh, timeout=60,
+                            stdin_text=_ws().bundle({_ws().PAGE_CACHE_FILE: value}))
+        if ok:
+            _PAGE_CACHE_NOTED[site.id] = value
+        else:
+            _core._log.warning("page cache state not written for website %s", site.id)
 
 
 def _plain(why):
@@ -455,9 +507,64 @@ def apply_refusal(out):
     return i18n.Sentence(NOT_STARTED if kv.get("applied") == "no" else BAD_CONFIG, why=_plain(errors[-1]))
 
 
+# remote id -> what the last apply or stop said of the guard: {"guard": "on"|"off", "fail2ban": "yes"|"no"|"absent"}.
+GUARD_STATE = {}
+
+
+def note_guard(remote, out):
+    """Keep what the helper's apply or stop printed of the guard (guard=, fail2ban=) for the host's card."""
+    kv = _ws()._ad.kv_lines(out)
+    if kv.get("guard") in ("on", "off"):
+        GUARD_STATE[remote.id] = {"guard": kv["guard"], "fail2ban": kv.get("fail2ban", "")
+                                  if kv.get("fail2ban") in ("yes", "no", "absent") else ""}
+
+
+GUARD_LIST_FAILED = "The host's list of blocked visitors could not be read. Try again."
+OK_RELEASED = "{ip} is no longer blocked."
+
+
+def _guard_ban(parts):
+    ok = len(parts) == 5 and parts[2].isdecimal() and parts[3].isdecimal()
+    return {"ip": parts[0], "jail": parts[1], "at": int(parts[2]), "until": int(parts[3]), "host": parts[4]} if ok else None
+
+
+def _guard_event(parts):
+    ok = len(parts) == 6 and parts[0].isdecimal() and parts[1].isdecimal()
+    return (int(parts[0]), int(parts[1]), parts[2], parts[3], parts[4], parts[5]) if ok else None
+
+
+def parse_guard_list(out):
+    """website-guard-list's lines as (entries [{ip, jail, at, until, host}], events [(seq, at, kind, ip, jail, host)])."""
+    entries, events = [], []
+    for line in (out or "").splitlines():
+        key, _sep, rest = line.partition("=")
+        got = _guard_ban(rest.split()) if key == "ban" else _guard_event(rest.split()) if key == "event" else None
+        if got is not None:
+            (entries if key == "ban" else events).append(got)
+    return entries, events
+
+
+def guard_list(remote, after=0):
+    """(ok, (entries, events) or a sentence): the host's blocked visitors and the ban events after number `after`."""
+    ok, out = _helper(remote, "website-guard-list", [str(int(after))], timeout=45)      # under the helper's read deadline
+    if not ok:
+        return False, out if out in (ONLY_LOCAL, NO_HELPER) else GUARD_LIST_FAILED
+    return True, parse_guard_list(out)
+
+
+def guard_release(remote, ip):
+    """Unban `ip` on the host: fail2ban lifts it (and its firewall ban) and the proxy's deny list drops it."""
+    from panel.core import i18n
+    ok, out = _helper(remote, "website-guard-release", [ip], timeout=60)
+    if ok and "released=yes" in out:
+        return True, i18n.Sentence(OK_RELEASED, ip=ip)
+    return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
+
+
 def proxy_stop(remote):
     """Stop the web proxy (the last enabled site went offline)."""
     ok, out = _helper(remote, "website-proxy-stop", timeout=120)
+    note_guard(remote, out)
     return (True, OK_PROXY_STOPPED) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
 
 

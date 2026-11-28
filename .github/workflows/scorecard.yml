@@ -53,7 +53,7 @@ jobs:
       image: ${{ steps.pin.outputs.image }}
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
@@ -61,7 +61,7 @@ jobs:
         id: pin
         env:
           # renovate: datasource=docker
-          SCORECARD_IMAGE: 'ghcr.io/ossf/scorecard-action:v2.5.0@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627'
+          SCORECARD_IMAGE: 'ghcr.io/ossf/scorecard-action:v2.6.0@sha256:7f092e5a4a363af001cca6cdb04f111e212173ba602336104394e7febc2c6e48'
         run: |
           set -euo pipefail
           ref="${SCORECARD_IMAGE%@*}"; want="${SCORECARD_IMAGE#*@}"
@@ -89,7 +89,7 @@ jobs:
       id-token: write   # publish results to the OpenSSF API (this is what powers the badge)
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Scorecard
-        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0
         with:
           results_file: results.sarif
           results_format: sarif
@@ -125,7 +125,7 @@ jobs:
       actions: read   # reads the analysis job's log
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 

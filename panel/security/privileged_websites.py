@@ -18,6 +18,22 @@ IMAGE_RE = r"[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}"
 STDIN_VERBS = frozenset({"website-proxy-apply"})
 
 
+# Blocked visitors: the websites' two fail2ban jails (services/websites_guard.JAILS), and a visitor's address as the
+# helper takes it (v_guard_ip): an IPv4 or IPv6 address and nothing else, no zone.
+GUARD_JAILS = ("lgsm-web-login", "lgsm-web-scan")
+
+
+def _guard_ip_ok(s):
+    import ipaddress
+    if not re.fullmatch(r"[0-9a-fA-F:.]{2,45}", s):
+        return False
+    try:
+        ipaddress.ip_address(s)
+    except ValueError:
+        return False
+    return True
+
+
 def _matcher(test, why, error):
     def check(s):
         s = str(s)
@@ -39,6 +55,12 @@ def argv(error, choice):
     module = _matcher(lambda s: bool(re.fullmatch(r"v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", s)),
                       "not an exact module version", error)
     cpu = _matcher(lambda s: s.isdecimal() and 100 <= int(s) <= 64000, "not a CPU share in thousandths", error)
+    ip = _matcher(_guard_ip_ok, "not an address", error)
+    jail = choice(*GUARD_JAILS)
+    seq = _matcher(lambda s: s.isdecimal() and len(s) <= 12, "not an event number", error)
+    bantime = _matcher(lambda s: bool(re.fullmatch(r"[0-9]{1,9}(?:\.[0-9]{1,6})?", s)) and 1 <= float(s) <= 31536000,
+                       "not a ban time", error)
+    stamp = _matcher(lambda s: bool(re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,9})?", s)), "not a time", error)
     validators = {
         "website-account-create": [account], "website-account-remove": [account],
         "website-proxy-install": [version, choice("amd64", "arm64"), sha256],
@@ -47,6 +69,10 @@ def argv(error, choice):
         "website-proxy-status": [], "website-egress-guard": [choice("on", "off")],
         "website-quota-set": [account, quota],
         "website-proxy-install-cache": [version, image, image, module], "website-cpu-limit": [account, cpu],
+        "website-guard-ban": [ip, jail, bantime], "website-guard-ban-at": [ip, jail, stamp, bantime, choice("0", "1")],
+        "website-guard-prolong": [ip, jail, stamp, bantime],
+        "website-guard-unban": [ip, jail], "website-guard-flush": [jail],
+        "website-guard-list": [seq], "website-guard-release": [ip],
     }
     return {verb: (checks, lambda a: [], None) for verb, checks in validators.items()}
 

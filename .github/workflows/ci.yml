@@ -98,12 +98,14 @@ jobs:
       # plain-http one, azure.archive.ubuntu.com or us-east-2.ec2.archive.ubuntu.com, so it is a
       # wildcard on port 80 (the agent matches `*.` as a suffix: docs.stepsecurity.io, "Endpoint
       # match precedence"), then the https archive and security mirrors the runner image lists after
-      # it (actions/runner-images configure-apt-sources.sh), packages.microsoft.com and esm.ubuntu.com.
+      # it (actions/runner-images configure-apt-sources.sh) and esm.ubuntu.com. Not
+      # packages.microsoft.com: the install step below takes the runner image's own Microsoft
+      # source out of apt's list first, so apt never asks it.
       # Everything else is refused with a REJECT (step-security/agent firewall.go), so a suite's
       # TEST-NET address gets "connection refused" at once, as tools/nosudo_runner.py refuses it
       # locally, and an unlisted name resolves to the agent's sinkhole address and is refused too.
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -114,7 +116,6 @@ jobs:
             files.pythonhosted.org:443
             github.com:443
             objects.githubusercontent.com:443
-            packages.microsoft.com:443
             pypi.org:443
             release-assets.githubusercontent.com:443
             security.ubuntu.com:443
@@ -160,6 +161,29 @@ jobs:
           --check-name "$CHECK_NAME"
           --work-step "Run all checks (compile, lint, unit, smoke, shellcheck)"
           --work-step "Run the root-only unit checks, as root"
+          --work-step "Every unit part ran here, none left out by a selection"
+
+      # On a pull request, a unit shard runs the parts its change can affect: the setup, part15,
+      # every part that walks the tree, every part the change edits (and those importing one), and
+      # every part main's impact map says ran, read or listed what changed (tests/unit/impact.py).
+      # .github/scripts/unit_select.py says what runs everything instead: any event but a pull
+      # request (main ALWAYS runs every part), the `full-tests` label, the runner, a shared test
+      # module, the requirements, a workflow, install.sh or tools/ changing, a file the map never
+      # saw, no map from a push to main, or one older than 7 days. An empty answer runs every part.
+      # The required checks keep their names: a shard with nothing selected runs its setup and
+      # part15 and says how many parts it ran. Never skipped: the security scanners, coverage
+      # (which runs every part and makes the map) and main's run (OWASP CI/CD Top 10, CICD-SEC-1).
+      - name: Which unit parts can this pull request's change affect?
+        id: select
+        if: github.event_name == 'pull_request' && steps.scope.outputs.docs_only != 'true' && startsWith(matrix.part, 'unit ')
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/unit_select.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: (steps.scope.outputs.docs_only != 'true' || matrix.docs) && steps.reuse.outputs.reuse != 'true'
@@ -204,9 +228,21 @@ jobs:
         # binary, not the service: the package's socket would listen on 19532, so its units are
         # masked before it is installed, and the step fails if anything listens there after. Not on
         # a documentation-only pull request: the two checks skip there, as they did everywhere.
+        #
+        # The runner image lists packages.microsoft.com among its apt sources, and that repository
+        # answered 403 twice on 2026-11-27, failing `apt-get update` and with it the whole leg,
+        # though nothing installed here comes from it. Each source file that names it is moved out
+        # of apt's list for this job only, so the update reads the Ubuntu archive alone: the same
+        # signed Release files, the same packages, one source fewer to go down.
         run: |
           sudo systemctl mask systemd-journal-remote.socket systemd-journal-remote.service \
             systemd-journal-upload.service
+          for src in /etc/apt/sources.list.d/*; do
+            if [ -f "$src" ] && grep -qs 'packages\.microsoft\.com' "$src"; then
+              sudo mv "$src" "$RUNNER_TEMP/"
+              echo "apt source taken out for this job: $src"
+            fi
+          done
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends zsh systemd-journal-remote
           test -x /usr/lib/systemd/systemd-journal-remote
@@ -249,8 +285,11 @@ jobs:
         # fails the step.
         env:
           PART: ${{ matrix.part }}
+          SELECTED: ${{ steps.select.outputs.parts }}
         run: |
           set -uo pipefail
+          # The selection above, for both runs (tests/unit/impact.py); empty, every part runs.
+          export UNIT_SELECT="${SELECTED}"
           case "${PART}" in
             suites)
               PYTHON=python REQUIRE_TOOLS=1 RUN_TESTS_PARALLEL=1 RUN_TESTS_UNIT=skip bash tools/run-tests.sh
@@ -269,12 +308,14 @@ jobs:
             # The step's shell is `bash -e`, and the subshell inherits it: the root run's own exit
             # status (non-zero by design, the next step judges its log) must not end the subshell
             # before the timing is written, nor become `wait`'s answer.
-            sudo -E env PATH="$PATH" UNIT_SHARD="${UNIT_SHARD}" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
+            sudo -E env PATH="$PATH" UNIT_SHARD="${UNIT_SHARD}" UNIT_SELECT="${UNIT_SELECT}" \
+              UNIT_PART_TIMES="${RUNNER_TEMP}/unit-times-root.json" \
+              bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
             echo "$((SECONDS - started))" > "${RUNNER_TEMP}/unit-root-seconds.txt"
           ) < /dev/null > "${RUNNER_TEMP}/unit-root.txt" 2>&1 &
           root_pid=$!
           PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" RUN_TESTS_UNIT=only \
-            bash tools/run-tests.sh || exit
+            UNIT_PART_TIMES="${RUNNER_TEMP}/unit-times-user.json" bash tools/run-tests.sh || exit
           wait "${root_pid}"
 
       - name: Run the root-only unit checks, as root
@@ -311,6 +352,8 @@ jobs:
           fi
           root_log="${RUNNER_TEMP}/unit-root.txt"
           echo "the unit suite as root took $(cat "${RUNNER_TEMP}/unit-root-seconds.txt" 2>/dev/null || echo '?')s"
+          # Its parts' times (tests/unit/timing.py's block), as the run as the runner prints its own above.
+          sed -n '/^unit part times /,/ s in all, /p' "${root_log}" 2>/dev/null | sed 's/^/as root: /' || true
           python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
           import re
           import sys
@@ -319,7 +362,7 @@ jobs:
 
 
           def read(path):
-              seen, why, tally, shard = {}, {}, None, None
+              seen, why, tally, shard, chosen = {}, {}, None, None, None
               with open(path, encoding="utf-8", errors="replace") as fh:
                   for ln in fh:
                       m = LINE.match(ln.rstrip("\n"))
@@ -331,7 +374,9 @@ jobs:
                           tally = ln.strip()
                       if ln.startswith("unit shard "):
                           shard = ln.split(":", 1)[0]
-              return seen, why, tally, shard
+                      if ln.startswith("unit selection: "):
+                          chosen = ln.strip()
+              return seen, why, tally, shard, chosen
 
 
           def fail(why):
@@ -350,8 +395,8 @@ jobs:
               print("::endgroup::")
 
 
-          user, user_why, user_tally, user_shard = read(sys.argv[1])
-          root, _, root_tally, root_shard = read(sys.argv[2])
+          user, user_why, user_tally, user_shard, user_sel = read(sys.argv[1])
+          root, _, root_tally, root_shard, root_sel = read(sys.argv[2])
           for _path, _tally, _label in ((sys.argv[1], user_tally, "as the runner"),
                                         (sys.argv[2], root_tally, "as root")):
               if _tally is None:
@@ -359,9 +404,9 @@ jobs:
           if user_tally is None or root_tally is None:
               fail("a unit run left no tally (as the runner: %s; as root: %s), so nothing can be "
                    "judged" % (user_tally, root_tally))
-          if user_shard != root_shard:
-              fail("the two runs are not the same part of the suite (as the runner: %s; as root: %s)"
-                   % (user_shard, root_shard))
+          if user_shard != root_shard or user_sel != root_sel:
+              fail("the two runs are not the same part of the suite (as the runner: %s, %s; as root: %s, %s)"
+                   % (user_shard, user_sel, root_shard, root_sel))
           gates = sorted(n for n, w in user_why.items() if re.search(r"\broot\b", w))
           # Each root-only branch also records itself under its skip's own name (tests/unit
           # part12's _r15d_root_ran), so a gate must PASS under that name as root: one that was
@@ -374,6 +419,11 @@ jobs:
           print("skipped for want of root: %d; ran only as root: %d" % (len(gates), len(only)))
           for n in only:
               print("  %s  %s" % ("FAIL" if n in bad else "PASS", n))
+          # A pull request's selection (tests/unit/impact.py) may hold no root-only check: said, and
+          # passed, only when both runs say the same selection and it ran no check that needed root.
+          if user_sel and "selection: every part" not in user_sel and not gates and not bad and not shut:
+              print("%s: none of its checks needs root" % user_sel)
+              sys.exit(0)
           if not gates or not only:
               fail("no check was skipped for want of root, or none ran only as root: this step "
                    "judged nothing")
@@ -382,6 +432,13 @@ jobs:
           if bad:
               fail("failed as root: %s" % "; ".join(bad))
           EOF
+
+      # What lets a push to main reuse this job's pass (.github/scripts/reuse_pr_result.py names this
+      # step as one of the work it needs): it runs only when no selection left a unit part out, so a
+      # pull request's selected run is never carried to main, which then runs every part itself.
+      - name: Every unit part ran here, none left out by a selection
+        if: steps.scope.outputs.docs_only != 'true' && steps.reuse.outputs.reuse != 'true' && steps.select.outputs.parts == ''
+        run: echo "no selection - every unit part of this part of the leg ran"
 
       # The documentation-only pull request's one check (see the scope step): the unit suite, which
       # reads README.md, SECURITY.md, the CHANGELOG and VERSIONS.md. On this leg only, each unit
@@ -420,7 +477,7 @@ jobs:
     steps:
       # Block mode. This job reaches nothing; GitHub's two hosts are every block list's floor (part223).
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -493,7 +550,7 @@ jobs:
       # (pull requests and pushes) beyond the Actions service names the agent allows by itself. The
       # suites' TEST-NET hosts are refused at once, as tools/smoke-local.sh refuses them locally.
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -616,7 +673,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/coverage-data"
           case "${PART}" in
             suites) suites="template_actions smoke rbac manage setup_wizard perf_budget input_validation url_map" ;;
-            "unit "[1-9]/[1-9]) suites=unit; export UNIT_SHARD="${PART#unit }" ;;
+            "unit "[1-9]/[1-9]) suites=unit; export UNIT_SHARD="${PART#unit }"
+              # What each part runs, reads and lists, for the impact map coverage-verdict builds on
+              # main (tests/unit/impact.py). Outside the checkout while the suite reads it.
+              export UNIT_IMPACT_RECORD="${RUNNER_TEMP}/impact.json" ;;
             *) echo "::error::not a part of the coverage run: ${PART}"; exit 1 ;;
           esac
           echo "| suite | seconds |" > /tmp/suite_times.md
@@ -635,6 +695,9 @@ jobs:
           _c0=$SECONDS; python -m coverage combine --rcfile=.github/coveragerc
           echo "| \`combine\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
           cp "${COVERAGE_FILE}" ".coverage.${ID}"
+          if [ -n "${UNIT_IMPACT_RECORD:-}" ] && [ -s "${UNIT_IMPACT_RECORD}" ]; then
+            cp "${UNIT_IMPACT_RECORD}" ".impact.${ID}.json"
+          fi
           {
             echo "### Coverage: ${PART}"
             echo ''
@@ -653,7 +716,9 @@ jobs:
           retention-days: 7
           include-hidden-files: true
           if-no-files-found: error
-          path: .coverage.${{ matrix.id }}
+          path: |
+            .coverage.${{ matrix.id }}
+            .impact.${{ matrix.id }}.json
 
   # The `coverage` check the ruleset requires: every part's data combined into the one report
   # Codacy reads (the `coverage` artifact codacy-coverage.yml downloads). `always()`, as for
@@ -672,7 +737,7 @@ jobs:
       COVERAGE_CORE: sysmon
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -774,6 +839,33 @@ jobs:
             coverage.txt
             docs-only.txt
 
+      # After the coverage report, whose upload is this job's first (codacy-coverage.yml reads it by name).
+      # The unit impact map (tests/unit/impact.py): what each unit part ran, read and listed, from the
+      # four unit parts' records, which a pull request's unit shards select their parts from
+      # (.github/scripts/unit_select.py). Made and uploaded on a push to main only, so a map only ever
+      # comes from main's own run; with a record missing (a part reused a run that made none) there
+      # is no new map, and pull requests keep the last one until it is 7 days old, then run every part.
+      - name: Build the unit impact map
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scope.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          parts="${RUNNER_TEMP}/coverage-parts"
+          for id in unit1 unit2 unit3 unit4; do
+            if [ ! -s "${parts}/.impact.${id}.json" ]; then
+              echo "no impact record from the ${id} part: no new map"; exit 0
+            fi
+          done
+          python tests/unit/impact.py build unit-impact-map.json "${GITHUB_SHA}" "${parts}"/.impact.unit*.json
+
+      - name: Upload the unit impact map
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unit-impact-map
+          retention-days: 7
+          if-no-files-found: ignore
+          path: unit-impact-map.json
+
       # Sending it to Codacy is NOT done here. This job runs the code under test — a pull request's
       # own code on a pull request — and the upload needs CODACY_PROJECT_TOKEN, which as a
       # repository secret was readable by a workflow on any branch pushed here. codacy-coverage.yml
@@ -837,7 +929,7 @@ jobs:
       # Block mode, the same hosts as coverage: Chrome's own calls to Google services are refused,
       # which changes nothing the walk measures (the panel's JavaScript, served from loopback).
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -976,7 +1068,7 @@ jobs:
     steps:
       # Block mode: the checkout, the scope step's API reads and the artifact service only.
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >
@@ -1079,7 +1171,7 @@ jobs:
         node: ["18.19", "22", "24"]
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: block
           allowed-endpoints: >

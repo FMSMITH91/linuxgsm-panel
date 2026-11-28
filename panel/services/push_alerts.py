@@ -68,6 +68,7 @@ _TEXT = {
     "backup_failed": ("Backup failed", ""),
     "update_available": ("Panel update available", ""),
     "os_updates": ("OS updates waiting", ""),
+    "auto_update_failed": ("Automatic update failed", ""),
     "cert_expiring": ("TLS certificate expiring", ""),
     "admin_login": ("Super admin signed in", ""),
     "admin_bruteforce": ("A super admin account is being brute-forced", ""),
@@ -86,7 +87,7 @@ _TEST_TITLE = "Test alert"
 _TEST_BODY = "Alerts reach this device."
 _FOLDED_TITLE = "{n} alerts"
 # The page a panel-wide alert opens, relative to the panel's root.
-_PAGE = {"update_available": "settings", "backup_failed": "server-management", "admin_login": "logs",
+_PAGE = {"update_available": "settings", "auto_update_failed": "updates", "backup_failed": "server-management", "admin_login": "logs",
          "admin_bruteforce": "logs", "account_locked": "logs", "ip_banned": "logs", "ban_spike": "logs",
          "account_change": "users", "credential_change": "logs", "twofa_enforced": "users"}
 

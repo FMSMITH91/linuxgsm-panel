@@ -868,10 +868,11 @@ def _p35_loops_gate():
             if problem:
                 bad.append("%s:%s %s" % (rel, node.name, problem))
     check("loops: every beating loop that sleeps before its first pass records that delay first, "
-          "and the delay it records is the one it sleeps (all twelve: host_reboot's restore loop "
+          "and the delay it records is the one it sleeps (all thirteen: host_reboot's restore loop "
           "is the ninth, the scheduled-wipe sweep the tenth, the hub-lag watch the eleventh, the "
-          "recovery sweep of an interrupted game restore the twelfth)",
-          not bad and recorded == 12, repr((bad, recorded)))
+          "recovery sweep of an interrupted game restore the twelfth, the nightly window's automatic updates the "
+          "thirteenth)",
+          not bad and recorded == 13, repr((bad, recorded)))
     _helpers = _beating_helpers35([("a.py", "def tick():\n    beat('x', 1)\n"),
                                    ("b.py", "def step():\n    tick()\n\ndef loop():\n    while True:\n"
                                             "        sleep(5)\n        step()\n\ndef idle():\n    work()\n")])

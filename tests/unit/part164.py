@@ -224,11 +224,17 @@ def _r30t_tops164(code, inline):
 
 
 def _r30t_cross_reads164(scripts, inline):
-    """{name: [files]}: top-level names of one script or inline block read bare by another script."""
+    r"""{name: [files]}: top-level names of one script or inline block read bare by another script.
+
+    A file is searched for a name only when the name is one of its identifiers: a bare read is a whole
+    [\w$] run equal to the name, so a file without that run cannot read it, and the regex searches
+    (40 s of this part, most of them over files that never mention the name) are skipped there.
+    """
     code = {f: _r30t_code164(t) for f, t in scripts.items()}
+    words = {f: set(_re164.findall(r"[\w$]+", c)) for f, c in code.items()}
     out = {}
     for owner, name in _r30t_tops164(code, inline):
-        for f in (f for f, c in code.items() if f != owner and _r30t_reads_bare164(c, name)):
+        for f in (f for f, c in code.items() if f != owner and name in words[f] and _r30t_reads_bare164(c, name)):
             out.setdefault(name, set()).add(f)
     return {k: sorted(v) for k, v in out.items()}
 

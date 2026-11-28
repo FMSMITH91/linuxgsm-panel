@@ -1,0 +1,22 @@
+{
+  "A security update: it installs by itself now, in tonight's window (until {end}), though automatic updates are off for it.": "Una actualización de seguridad: se instala sola ahora, en la ventana de esta noche (hasta las {end}), aunque sus actualizaciones automáticas estén desactivadas.",
+  "A security update: it installs by itself the next night at {at}, though automatic updates are off for it.": "Una actualización de seguridad: se instala sola la próxima noche a las {at}, aunque sus actualizaciones automáticas estén desactivadas.",
+  "By itself now, in tonight's window (until {end}, the host's clock), if no players are on.": "Por sí solo ahora, en la ventana de esta noche (hasta las {end}, reloj del host), si no hay jugadores.",
+  "By itself now, in tonight's window (until {end}, the host's clock).": "Sola ahora, en la ventana de esta noche (hasta las {end}, reloj del host).",
+  "By itself the next night at {at} (the host's clock), if no players are on.": "Por sí solo la próxima noche a las {at} (reloj del host), si no hay jugadores.",
+  "By itself the next night at {at} (the host's clock).": "Sola la próxima noche a las {at} (reloj del host).",
+  "It can visit every website on this host again. If it attacks again, it is blocked again.": "Podrá visitar de nuevo todos los sitios web de este host. Si vuelve a atacar, se bloquea de nuevo.",
+  "It was already unblocked.": "Ya estaba desbloqueada.",
+  "No longer queued": "Ya no está en cola",
+  "No longer waiting for players to leave.": "Ya no espera a que se vayan los jugadores.",
+  "Nothing to update now.": "Nada que actualizar ahora.",
+  "Queued for when players leave.": "En cola para cuando se vayan los jugadores.",
+  "The update failed: the audit log keeps LinuxGSM's output.": "La actualización falló: el registro de auditoría guarda la salida de LinuxGSM.",
+  "The {n} player(s) on now are not warned first: this game's console has no chat command the panel uses.": "Los {n} jugador(es) conectados ahora no reciben aviso previo: la consola de este juego no tiene un comando de chat que el panel use.",
+  "The {n} player(s) on now are warned in the game first: by the panel 1 minute before the update, or by LinuxGSM's own countdown where its warning timer is set.": "Los {n} jugador(es) conectados ahora reciben primero un aviso en el juego: del panel 1 minuto antes de la actualización, o de la cuenta atrás de LinuxGSM donde su temporizador de aviso está configurado.",
+  "Unblock {ip}?": "¿Desbloquear {ip}?",
+  "Update {name} now?": "¿Actualizar {name} ahora?",
+  "Updated to build {build}.": "Actualizado a la compilación {build}.",
+  "Updated.": "Actualizado.",
+  "What is listed can restart services or need a reboot: its Update now opens the page that runs it.": "Lo que aparece en la lista puede reiniciar servicios o necesitar un reinicio: su Actualizar ahora abre la página que lo ejecuta."
+}

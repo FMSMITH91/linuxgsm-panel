@@ -123,6 +123,12 @@
        covers the per-server pages that used to sit under "Game Servers". #}
     <li><a href="{{ url_for('index') }}" class="{% if request.endpoint in ('index', 'server_detail', 'server_files') %}active{% endif %}">
       <i class="bi bi-speedometer2"></i> Dashboard</a></li>
+    {# Updates: updates_nav() (panel/routes/updates.py) answers the page's URL for a viewer who sees any of its
+       groups, else ''. The count is filled after the page loads (panel.js, /api/updates/count). #}
+    {% if updates_nav is defined and updates_nav() %}
+    <li><a href="{{ url_for('updates_page') }}" class="{% if request.endpoint == 'updates_page' %}active{% endif %}">
+      <i class="bi bi-cloud-arrow-down"></i> Updates <span id="nav-updates-count" class="badge rounded-pill text-bg-warning ms-1" data-no-i18n hidden></span></a></li>
+    {% endif %}
   </ul>
 
   {# Sidebar active-state: each nav item must list EVERY endpoint that renders under it, including a

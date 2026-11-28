@@ -2004,8 +2004,7 @@ _r16d_wrap_ts_handles()
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
 # part154 (review 1107's firewall and lock-out findings: the auto-block spares the panel's own source,
-# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108,
-# 116, 135 and 136.
+# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108, 116, 135 and 136.
 # part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
 # game operations) drives part12's app with every host call stubbed; imports part01 and 12.
 # part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
@@ -2016,8 +2015,7 @@ _r16d_wrap_ts_handles()
 # runs install.sh's functions through part06's extractor; imports part01 and 06.
 # part169 (CI: coverage, js coverage and Lighthouse skip what they do not measure) imports part01.
 # part170 (a Java Minecraft server's operators, whitelist and bans: the console lines and their refusals,
-# the routes on part12's app with every host call stubbed, the page and its card script in node) imports
-# part01, 12 and 75.
+# the routes on part12's app with every host call stubbed, the page and its card script in node) imports part01, 12 and 75.
 # part171 (a PaperMC server's plugins from Modrinth: the checks on ids, queries, file names and hashes with the
 # network replaced, the routes on part12's app with every host call stubbed, the page and its card script in
 # node) imports part01, 12 and 75.
@@ -2142,9 +2140,11 @@ _r16d_wrap_ts_handles()
 # part294 (review pass 36's runtime fixes) drives part12's app, stand-in transports, bash over scratch files and part190's
 # restore sandbox, part272's BlueMap and part278's B3 stand-ins and node; imports part01, 12, 47, 190, 272 and 278.
 # part296 (socket events with two arguments, the database password reset's claim, the update gate's security
-# checks) drives part12's app; imports part01 and 12.
+# checks) drives part12's app; imports part01 and 12. part320 (the Updates page, the nightly window) imports part01 and 12.
 # part309 (History from 24 hours to a year: the hourly rollup tick, the long ranges' routes, the pages and their scripts) drives part12's app and node; imports
 # part01, 12, 75 and 131. part316 (websites' fixes) imports part01, 12 and 301. part319 (websites' egress proxy and gate) imports part01, 12 and 301.
+# part323 (game updates on the Updates page) imports part01, 12, 301 and 322. part324 (fixes a host's proof asked for) imports part01, 12, 301 and 322.
+# part325 (the part clock, the shard weights, test impact selection and CI's use of it) imports part01 and 06. part326 imports part01, 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2166,7 +2166,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
     "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
     "part298", "part299", "part300", "part301", "part302", "part305", "part306", "part294", "part297", "part296", "part295", "part303", "part307", "part308",
-    "part309", "part310", "part311", "part317", "part313", "part314", "part315", "part316", "part318", "part319", "part15")
+    "part309", "part310", "part311", "part317", "part313", "part314", "part315", "part316", "part318", "part319", "part320", "part321", "part322", "part323",
+    "part324", "part325", "part326", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2196,9 +2197,8 @@ def _hub_leftovers():
             f = f.f_back
         fn = f.f_locals.get("function") if f is not None else None
         code = getattr(f, "f_code", None)
-        return "a greenthread running %s" % (
-            getattr(fn, "__qualname__", None) or getattr(code, "co_qualname", None)
-            or getattr(code, "co_name", "?"))
+        return "a greenthread running %s" % (getattr(fn, "__qualname__", None) or getattr(code, "co_qualname", None)
+                                             or getattr(code, "co_name", "?"))
     left =["%s listener on fd %d, for %s" % (ev, fd, _whose(ls))
             for ev, bucket in hub.listeners.items() for fd, ls in bucket.items() if fd != tpool_fd]
     left += ["%s secondary listener on fd %d, for %s" % (ev, fd, _whose(ls))
@@ -2248,14 +2248,16 @@ def _r26d_pin_helper(part):
 # per-run gates below judge what this process ran; the gates that read the whole suite (the ordering
 # notes, the import order, every part file in _PARTS, the shards owning each part once) run in the
 # unsplit run and in shard 1 only (_whole_check), so the shards together run each of them once.
-_RUN_PARTS = _shard.RUN = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
+# UNIT_SELECT cuts that to the parts a change can affect (tests/unit/impact.py); shard.run_part imports
+# each one under UNIT_PART_TIMES' clock and UNIT_IMPACT_RECORD's recorder, both off when unset.
+_RUN_PARTS = _shard.RUN = _shard.start(_SHARD, _PARTS, _root, os.environ)
 for _part in _RUN_PARTS:
     _path_before = list(sys.path)
     _r26d_pin_helper(_part)
     # Again before each part: part05 reinstalls nosudo_runner's shim over every module's subprocess,
     # and that replaced this answer for the rest of the run.
     _r16d_wrap_ts_handles()
-    importlib.import_module("unit." + _part)
+    _shard.run_part(_part)
     _hub_after.append((_part, _hub_leftovers()))
     if (tempfile.mkdtemp is not _r15d_tracked_mkdtemp or tempfile.mkstemp is not _r15d_tracked_mkstemp
             or tempfile._mkstemp_inner is not _r16d_tracked_mkstemp_inner):

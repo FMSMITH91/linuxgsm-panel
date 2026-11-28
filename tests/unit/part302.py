@@ -140,7 +140,8 @@ _PATHS302 = {"WEB_PROXY_DIR": "lib", "WEB_PROXY_BIN": "lib/caddy", "WEB_PROXY_ET
              "WEB_PROXY_CERTS": "etc/certs", "WEB_PROXY_STATE": "state", "WEB_PROXY_UNIT_FILE": "units/proxy.service",
              "WEB_JOURNAL_CONF": "units/journald.conf", "WEB_GUARD_FILE": "etc/egress-guard.nft",
              "WEB_GUARD_UNIT_FILE": "units/guard.service", "WEB_MARK_DIR": "marks",
-             "WEB_REBIND_UNIT_FILE": "units/rebind.service", "WEB_REBIND_TIMER_FILE": "units/rebind.timer"}
+             "WEB_REBIND_UNIT_FILE": "units/rebind.service", "WEB_REBIND_TIMER_FILE": "units/rebind.timer",
+             "WEB_LOG_DIR": "log"}
 
 
 def _plain_write302(path, data, _mode, _uid=0, _gid=0):

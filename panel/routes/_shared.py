@@ -1308,6 +1308,10 @@ def _settle_queued_action(app, gs):
                          gs.query_type) if status == "online" else None
     # 'restart' here means "online + empty -> act now"; 'idle' = already stopped.
     decision = mod_restart_decision(status, pc)
+    from panel.services import game_updates_run as _gur
+    if _gur.only_update_queued(gs):
+        _gur.settle_queued(app, gs, decision)       # "Update when empty": stopped or empty, it runs now
+        return
     if decision == "idle":
         _queued_action_failures.pop(gs.id, None)
         gs.restart_pending = gs.stop_pending = False
@@ -1338,7 +1342,7 @@ def _run_due_restarts(app):
     """
     with app.app_context():
         pending = [gs for gs in GameServer.query.filter_by(installed=True).all()
-                   if gs.remote_id and (gs.restart_pending or gs.stop_pending)]
+                   if gs.remote_id and (gs.restart_pending or gs.stop_pending or gs.update_pending)]
         # A cancelled action's failure count must not carry over — see _forget_unqueued_failures.
         _forget_unqueued_failures(pending)
         for gs in pending:
@@ -1365,7 +1369,7 @@ def _r37b_queued_ready(gs):
     # anyway (and a cancelled stop, its flags reloaded as both off by an earlier server's
     # commit, ran as a restart: _run_queued_action takes "not a stop" for a restart).
     db.session.refresh(gs)
-    if not (gs.restart_pending or gs.stop_pending):
+    if not (gs.restart_pending or gs.stop_pending or gs.update_pending):
         return False
     # Don't restart/stop a server that's being backed up right now — the backup already
     # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.

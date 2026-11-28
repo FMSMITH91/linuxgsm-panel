@@ -724,6 +724,8 @@ def _s11_enable(st):
     _db316.session.commit()
     _p9_patch(_wd316._dns, "check", lambda domain, remote: ("mismatch", [], []))
     _p9_patch(_sw316, "proxy_apply", _REAL_APPLY316)
+    # The apply's page cache note writes as each WordPress site's account (part321 checks it); not this section's.
+    _p9_patch(_sw316, "note_page_cache", lambda *a, **k: None)
     su, got = _Client316(st.su.id), {}
     try:
         for mode in ("public", "tunnel"):

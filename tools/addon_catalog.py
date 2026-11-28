@@ -15,7 +15,9 @@ Usage:
 
 The source holds `schema`, `addons` and `sites` (the websites' pins, checked by the same function the
 panels use: panel/services/websites_catalog.py's sites_problems, loaded by path). A catalog without
-`sites` is refused: signing one would drop the websites' pins from every panel.
+`sites` is refused: signing one would drop the websites' pins from every panel. It may also hold
+`security` (which pins are security updates: panel/services/catalog_security.py's security_problems,
+loaded by path the same way).
 
 The published catalog is the source object plus `seq` (the previous published seq + 1), `issued` and
 `expires` (issued + LIFETIME_DAYS), serialized as json.dumps(obj, indent=2, sort_keys=True) + "\n":
@@ -56,6 +58,13 @@ _WC_SPEC.loader.exec_module(_WC)
 def _sites_problems(sites):
     """websites_catalog.sites_problems(sites): why the section is refused, [] when it passes."""
     return _WC.sites_problems(sites)
+
+
+# The panels' own check of the optional `security` section, loaded by path as the one above.
+_CS_SPEC = importlib.util.spec_from_file_location(
+    "catalog_security_for_signing", os.path.join(_REPO, "panel", "services", "catalog_security.py"))
+_CS = importlib.util.module_from_spec(_CS_SPEC)
+_CS_SPEC.loader.exec_module(_CS)
 
 
 # The checks a commit must have passed before its catalog is signed: the set deploy.yml's verify step
@@ -100,11 +109,16 @@ def source_problems(obj, need_sites=True):
     Without `need_sites`: a catalog published before the websites' pins existed (schema and addons only).
     """
     keys = _SOURCE_KEYS if need_sites else ["addons", "schema"]
-    if not isinstance(obj, dict) or sorted(obj) != keys:
+    if not isinstance(obj, dict) or sorted(k for k in obj if k != "security") != keys:
         return ["the catalog must hold exactly %s" % ", ".join("`%s`" % k for k in keys)]
     out = [] if obj["schema"] == SCHEMA and _whole(obj["schema"]) else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
     out += _sites_problems(obj["sites"]) if need_sites else []
-    return out + _addons_problems(obj["addons"])
+    return out + _security_problems(obj) + _addons_problems(obj["addons"])
+
+
+def _security_problems(obj):
+    """catalog_security.security_problems of the source's optional `security` section ([] without one)."""
+    return _CS.security_problems(obj["security"]) if "security" in obj else []
 
 
 def _addons_problems(addons):
@@ -124,8 +138,8 @@ def _parse_time(text):
 
 def published_problems(obj):
     """Why `obj` is not a published catalog; [] when it is."""
-    if not isinstance(obj, dict) or sorted(obj) not in (sorted(_SOURCE_KEYS + list(_PUBLISHED_KEYS)),
-                                                        ["addons", "expires", "issued", "schema", "seq"]):
+    if not isinstance(obj, dict) or sorted(k for k in obj if k != "security") not in (
+            sorted(_SOURCE_KEYS + list(_PUBLISHED_KEYS)), ["addons", "expires", "issued", "schema", "seq"]):
         return ["a published catalog holds exactly schema, addons, sites, seq, issued and expires"]
     if "sites" not in obj:      # published before the websites' pins existed: its add-ons alone are checked
         return _published_extra(obj, source_problems(core(obj), need_sites=False))
@@ -162,7 +176,8 @@ def changes(before, after):
 def _sites_changes(before, after):
     """Lines naming each part of the `sites` section that differs."""
     olds, news = (before or {}).get("sites") or {}, after.get("sites") or {}
-    return ["  sites.%s: changed" % k for k in sorted(set(olds) | set(news)) if olds.get(k) != news.get(k)]
+    lines = ["  sites.%s: changed" % k for k in sorted(set(olds) | set(news)) if olds.get(k) != news.get(k)]
+    return lines + (["  security: changed"] if (before or {}).get("security") != after.get("security") else [])
 
 
 def _loaded(text, check):

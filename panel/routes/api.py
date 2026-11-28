@@ -508,7 +508,10 @@ def _lgsm_version_info(gs):
     be read. `behind` only when both are known and the server's is older: a release the panel has
     not read yet is never reported as out of date.
     """
-    return _lgsm_update.state(_lgsm_update.script_release(gs.remote, gs.short_name, gs.lgsm_name))
+    info = _lgsm_update.state(_lgsm_update.script_release(gs.remote, gs.short_name, gs.lgsm_name))
+    from panel.services import updates as _upd
+    _upd.note_lgsm(gs.id, info)           # what the Updates page lists for this server
+    return info
 
 
 def _register_installs(app):
@@ -711,7 +714,9 @@ def _status_flips(app, scanned):
             # progress row vanish and show "Not installed" the moment you navigated back.
             if not gs.installed or gs.status in ("installing", "configuring"):
                 continue
-            st = "online" if game_port_listening(getattr(gs, "game_type", None), gs.port, ports) else "offline"
+            # getattr: a status read never raises; a row without its account counts every socket, as before.
+            st = "online" if game_port_listening(getattr(gs, "game_type", None), gs.port, ports,
+                                                 getattr(gs, "short_name", None)) else "offline"
             if gs.status != st:
                 # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
                 # commit then flushes one UPDATE per server no matter what bulk statement runs

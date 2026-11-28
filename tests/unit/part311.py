@@ -109,6 +109,15 @@ sys.exit(rc)
 '''
 
 
+# A failed tunnel-mode apply ends with this note (part321 checks it); the checks here are about the sentence before it.
+_CLOSED311 = " Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel."
+
+
+def _said311(r):
+    said = (r.get_json() or {}).get("message") or ""
+    return said[:-len(_CLOSED311)] if said.endswith(_CLOSED311) else said
+
+
 def _tools311():
     os.makedirs(_BIN311, exist_ok=True)
     for name in ("podman", "systemctl", "journalctl"):
@@ -117,6 +126,14 @@ def _tools311():
             fh.write("#!%s\n%s" % (_sys311.executable, _FAKE311))
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
         os.chmod(path, 0o700)
+    # The tunnel apply's settle loop sleeps one second per poll, up to TUNNEL_SETTLE_S polls: ~35 s of this
+    # part was those sleeps. What the checks read is the state each poll finds and after how many polls (the
+    # stand-ins count their calls), never the clock, so the loop's `sleep` returns at once here.
+    path = os.path.join(_BIN311, "sleep")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\nexit 0\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+    os.chmod(path, 0o700)
 
 
 def _home311(account):
@@ -400,7 +417,7 @@ def _s3_tunnel(st):
     _reset311(FAKE_RESTART_RC=1)
     r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
     _db311.session.expire_all()
-    said = (r.get_json() or {}).get("message")
+    said = _said311(r)
     eq("M15 (POST /websites/proxy/apply, the connector does not start): the sentence names the tunnel connector, not "
        "\"the site's log\" (a host's tunnel has none)",
        (r.status_code, said, _db311.session.get(_Proxy311, proxy.id).last_error), (502, _sw311.TUNNEL_FAILED,
@@ -408,7 +425,7 @@ def _s3_tunnel(st):
     _reset311(FAKE_IMAGE_EXISTS=1, FAKE_BUILD_RC=1)
     r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
     eq("M15 control (the connector's image build fails): that failure keeps its own sentence",
-       (r.status_code, (r.get_json() or {}).get("message")), (502, _ws311.FAIL_MARKS["SITE_BUILD_FAILED"]))
+       (r.status_code, _said311(r)), (502, _ws311.FAIL_MARKS["SITE_BUILD_FAILED"]))
     _s3_tunnel_settle(st, su, proxy)
 
 
@@ -425,7 +442,7 @@ def _s3_tunnel_settle(st, su, proxy):
             os.unlink(os.path.join(home, ".nrestarts-read"))
         r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
         _db311.session.expire_all()
-        got[name] = (r.status_code, (r.get_json() or {}).get("message"), _db311.session.get(_Proxy311, proxy.id).last_error)
+        got[name] = (r.status_code, _said311(r), _db311.session.get(_Proxy311, proxy.id).last_error)
     bad = (502, _sw311.TUNNEL_FAILED, _sw311.TUNNEL_FAILED)
     eq("M16 (POST /websites/proxy/apply, the restart returned but the connector is then not active, failed, or "
        "restarted by systemd): the apply says the tunnel did not start, stored as the proxy's last_error; a connector "
@@ -462,7 +479,7 @@ def _s3_tunnel_refused(st, su, proxy):
         _reset311(FAKE_JOURNAL=log)
         r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
         _db311.session.expire_all()
-        got[name] = (r.status_code, (r.get_json() or {}).get("message"), _db311.session.get(_Proxy311, proxy.id).last_error)
+        got[name] = (r.status_code, _said311(r), _db311.session.get(_Proxy311, proxy.id).last_error)
     eq("F2 (POST /websites/proxy/apply, tunnel mode, a well-formed token Cloudflare refuses: the unit stays active "
        "with no restart while cloudflared retries): the apply reads the connector's log and says Cloudflare refused "
        "the token, stored as the proxy's last_error; a connector that registers a connection is applied (control); "

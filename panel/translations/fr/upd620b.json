@@ -1,0 +1,22 @@
+{
+  "A security update: it installs by itself now, in tonight's window (until {end}), though automatic updates are off for it.": "Une mise à jour de sécurité : elle s'installe toute seule maintenant, dans la fenêtre de cette nuit (jusqu'à {end}), même si ses mises à jour automatiques sont désactivées.",
+  "A security update: it installs by itself the next night at {at}, though automatic updates are off for it.": "Une mise à jour de sécurité : elle s'installe toute seule la nuit prochaine à {at}, même si ses mises à jour automatiques sont désactivées.",
+  "By itself now, in tonight's window (until {end}, the host's clock), if no players are on.": "Tout seul maintenant, dans la fenêtre de cette nuit (jusqu'à {end}, horloge de l'hôte), si aucun joueur n'est connecté.",
+  "By itself now, in tonight's window (until {end}, the host's clock).": "Toute seule maintenant, dans la fenêtre de cette nuit (jusqu'à {end}, horloge de l'hôte).",
+  "By itself the next night at {at} (the host's clock), if no players are on.": "Tout seul la nuit prochaine à {at} (horloge de l'hôte), si aucun joueur n'est connecté.",
+  "By itself the next night at {at} (the host's clock).": "Toute seule la nuit prochaine à {at} (horloge de l'hôte).",
+  "It can visit every website on this host again. If it attacks again, it is blocked again.": "Elle peut de nouveau visiter tous les sites web de cet hôte. Si elle attaque encore, elle est de nouveau bloquée.",
+  "It was already unblocked.": "Elle était déjà débloquée.",
+  "No longer queued": "Plus en file d'attente",
+  "No longer waiting for players to leave.": "N'attend plus le départ des joueurs.",
+  "Nothing to update now.": "Rien à mettre à jour maintenant.",
+  "Queued for when players leave.": "En file d'attente jusqu'au départ des joueurs.",
+  "The update failed: the audit log keeps LinuxGSM's output.": "La mise à jour a échoué : le journal d'audit garde la sortie de LinuxGSM.",
+  "The {n} player(s) on now are not warned first: this game's console has no chat command the panel uses.": "Les {n} joueur(s) connectés ne sont pas prévenus avant : la console de ce jeu n'a pas de commande de discussion que le panneau utilise.",
+  "The {n} player(s) on now are warned in the game first: by the panel 1 minute before the update, or by LinuxGSM's own countdown where its warning timer is set.": "Les {n} joueur(s) connectés sont d'abord prévenus dans le jeu : par le panneau 1 minute avant la mise à jour, ou par le compte à rebours de LinuxGSM là où son minuteur d'avertissement est réglé.",
+  "Unblock {ip}?": "Débloquer {ip} ?",
+  "Update {name} now?": "Mettre à jour {name} maintenant ?",
+  "Updated to build {build}.": "Mis à jour vers la version {build}.",
+  "Updated.": "Mis à jour.",
+  "What is listed can restart services or need a reboot: its Update now opens the page that runs it.": "Ce qui est listé peut redémarrer des services ou demander un redémarrage : son Mettre à jour maintenant ouvre la page qui l'exécute."
+}

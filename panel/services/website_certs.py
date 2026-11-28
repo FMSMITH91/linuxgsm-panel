@@ -73,7 +73,7 @@ def alert_expiring(now=None, clock=None):
     from panel.services import notifications
     clock = time.time() if clock is None else clock
     try:
-        for row in WebsiteDomain.query.filter_by(cert_mode="own").all():
+        for row in WebsiteDomain.query.filter(WebsiteDomain.cert_mode.in_(("own", "site"))).all():
             text = alert_text(row, now)
             if not text or clock - _ALERTED.get(row.domain, 0) < ALERT_EVERY:
                 continue

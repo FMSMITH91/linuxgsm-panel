@@ -411,6 +411,13 @@ function _r21cLogNote(el, key){
     if (fallback) { show('overview'); }
   }
   openHash(true);
+  // The Updates page's Update now (routes/updates.py) lands here with ?update=os or ?update=panel: the card's own
+  // confirmation opens, once every script of the page has loaded (doPanelUpdate is remote_manage_host.js's).
+  window.addEventListener('load', function(){
+    var want = new URLSearchParams(location.search).get('update');
+    if (want === 'os' && typeof window.runUpdates === 'function') window.runUpdates();
+    else if (want === 'panel' && typeof window.doPanelUpdate === 'function') window.doPanelUpdate();
+  });
   // Following a #card link while ALREADY on this page changes the hash without reloading, so the
   // banner's link would otherwise do nothing for the host you happen to be looking at.
   window.addEventListener('hashchange', function(){ openHash(false); });

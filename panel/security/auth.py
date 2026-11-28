@@ -2095,14 +2095,15 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
                  {"game_server_id": _audit_ref(GameServer, server), "remote_id": _audit_ref(RemoteServer, remote)})
 
 
-def log_website_action(user, site, action, detail="", success=True):
+def log_website_action(user, site, action, detail="", success=True, actor=None):
     """Write an audit entry about website `site`: the target is its name and the row carries its id.
 
     The id (AuditLog.website_id) is what lets the site's users, a customer included, read the row
     (audit_scope, a site's own log view), never the name. Never put file contents, passwords or tokens
-    in `detail` (OWASP Logging Cheat Sheet, "Data to exclude").
+    in `detail` (OWASP Logging Cheat Sheet, "Data to exclude"). `actor` names who acted when no user did
+    (the nightly window's "automatic").
     """
-    _write_audit(user, action, getattr(site, "name", "") or "", detail, success, None,
+    _write_audit(user, action, getattr(site, "name", "") or "", detail, success, actor,
                  {"website_id": _audit_ref(Website, site)})
 
 

@@ -306,6 +306,19 @@ document.addEventListener('change', function(e){
 // not. Returns the interval id (clearable). Use in place of setInterval for anything that
 // fetches live data on a timer.
 var _visPolls = {};   // interval id -> its visibilitychange listener, so stopPolling can undo both
+// The sidebar's Updates entry (base.html): how many updates this viewer may see are waiting, asked after the
+// page has painted (the server keeps the count a minute per viewer: routes/updates.py).
+document.addEventListener('DOMContentLoaded', function(){
+  var badge = document.getElementById('nav-updates-count');
+  if (!badge) return;
+  function count(){
+    fetch((window.MOUNT || '') + '/api/updates/count', {cache: 'no-store'}).then(function(r){ return r.json(); })
+      .then(function(d){ var n = d && typeof d.count === 'number' ? d.count : 0; badge.textContent = n ? String(n) : ''; badge.hidden = !n; })
+      .catch(function(){});
+  }
+  count();
+  if (window.pollWhenVisible) window.pollWhenVisible(count, 10 * 60 * 1000);
+});
 window.pollWhenVisible = function(fn, intervalMs){
   // The catch-up on focus is THROTTLED, and the listener can be removed. Unthrottled, the interval
   // argument meant nothing on that path: nags.js registers osUpdatesNagCheck at one hour and

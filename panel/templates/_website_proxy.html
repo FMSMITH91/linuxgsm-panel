@@ -99,6 +99,67 @@
     </form>
     </details>
 
+    {# Blocked visitors (services/websites_guard): fail2ban's bans kept inside the web proxy. OWASP's words beside each
+       field come from the server (guard.owasp); a value outside them shows a note and is saved anyway. #}
+    <details id="wp-guard-box" class="mt-2">
+      <summary class="small" id="wp-guard-sum">Blocked visitors</summary>
+      <form id="wp-guard" class="row g-2 mt-1" data-action="wsSaveGuard" data-args='["@event"]' data-on="submit">
+        <p class="col-12 form-text mt-0 mb-0">A visitor that tries too many sign-ins, or asks for paths only scanners ask for, is blocked by the web proxy itself for a while, so this works behind Cloudflare too. In Public mode the firewall blocks it as well. Each website lists its own on its Rules tab.</p>
+        <p id="wp-guard-f2b" class="col-12 small text-warning mb-0" hidden>fail2ban is not installed on this host, so no visitor is blocked.</p>
+        <div class="col-12">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-guard-on" data-action="wsGuardCheck" data-on="change">
+            <label class="form-check-label small" for="wp-guard-on">Block visitors that attack the websites</label>
+          </div>
+          <div id="wp-guard-on-note" class="form-text text-warning" hidden>OWASP recommends throttling sign-in attempts; with blocking off, nothing limits them on these websites.</div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-guard-login" class="form-label small mb-1">Sign-in attempts</label>
+          <input type="number" id="wp-guard-login" class="form-control form-control-sm" min="1" max="1000" step="1">
+          <div id="wp-guard-login-owasp" class="form-text" data-no-i18n></div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-guard-scan" class="form-label small mb-1">Scanner requests</label>
+          <input type="number" id="wp-guard-scan" class="form-control form-control-sm" min="1" max="1000" step="1">
+          <div id="wp-guard-scan-owasp" class="form-text" data-no-i18n></div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-guard-findtime" class="form-label small mb-1">Within (minutes)</label>
+          <input type="number" id="wp-guard-findtime" class="form-control form-control-sm" min="1" max="1440" step="1">
+          <div id="wp-guard-findtime-owasp" class="form-text" data-no-i18n></div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-guard-bantime" class="form-label small mb-1">First ban (minutes)</label>
+          <input type="number" id="wp-guard-bantime" class="form-control form-control-sm" min="1" max="43200" step="1" data-action="wsGuardCheck" data-on="input">
+          <div id="wp-guard-bantime-owasp" class="form-text" data-no-i18n></div>
+          <div id="wp-guard-bantime-note" class="form-text text-warning" hidden>Shorter than OWASP's example of a 10-minute lockout. It is still saved.</div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-guard-maxtime" class="form-label small mb-1">Longest ban (hours)</label>
+          <input type="number" id="wp-guard-maxtime" class="form-control form-control-sm" min="1" max="8760" step="1">
+          <div id="wp-guard-maxtime-owasp" class="form-text" data-no-i18n></div>
+        </div>
+        <div class="col-12">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-guard-increment" data-action="wsGuardCheck" data-on="change">
+            <label class="form-check-label small" for="wp-guard-increment">Ban longer each time the same address is banned again</label>
+          </div>
+          <div id="wp-guard-increment-owasp" class="form-text" data-no-i18n></div>
+          <div id="wp-guard-increment-note" class="form-text text-warning" hidden>OWASP recommends a ban that grows each time the same address is banned again.</div>
+        </div>
+        <div class="col-12">
+          <label for="wp-guard-allow" class="form-label small mb-1">Never block, one address or network per line</label>
+          <textarea id="wp-guard-allow" class="form-control form-control-sm font-monospace" rows="2" maxlength="6000"
+                    spellcheck="false" data-no-i18n aria-describedby="wp-guard-allow-help"></textarea>
+          <div id="wp-guard-allow-help" class="form-text mt-0">Also never blocked: this host's own addresses, your tailnet, every CDN's networks, the allow list above and the panel's login whitelist.</div>
+        </div>
+        <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
+          <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+          <span id="wp-guard-msg" class="small" role="status"></span>
+        </div>
+      </form>
+    </details>
+
     <details id="wp-opts-box" class="mt-2">
       <summary class="small" id="wp-opts-sum">Security settings</summary>
       <form id="wp-opts" class="row g-2 mt-1" data-action="wsSaveOptions" data-args='["@event"]' data-on="submit">

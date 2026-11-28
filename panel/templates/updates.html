@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_fold.html" import fold %}
+{% block title %}{{ t('Updates') }}{% endblock %}
+{% block content %}
+{# Every update waiting, in one list (routes/updates.py, js/updates.js): read from /api/updates, which takes
+   what the panel already holds, so opening the page asks no host anything. Each row's Update now is the
+   item's own route; "Update everything safe now" runs the rows that kick no player and need no reboot. #}
+<div id="upd-page">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h1 class="page-title mb-0"><i class="bi bi-cloud-arrow-down"></i> Updates</h1>
+    {% if allowed %}
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <span id="upd-safe-why" class="small text-secondary" hidden></span>
+      <button type="button" id="upd-games-check" class="btn btn-outline-secondary btn-sm text-nowrap" data-action="updGamesCheck" hidden>
+        <i class="bi bi-arrow-repeat"></i> Check games now</button>
+      <button type="button" id="upd-safe" class="btn btn-primary btn-sm text-nowrap" data-action="updSafe" disabled>
+        <i class="bi bi-lightning-charge"></i> Update everything safe now</button>
+    </div>
+    {% endif %}
+  </div>
+  {% if allowed %}
+  <div id="upd-off" class="alert alert-warning py-2 px-2 small mb-2" role="status" hidden>
+    <i class="bi bi-exclamation-triangle"></i> <span id="upd-off-text"></span>
+  </div>
+  <div id="upd-msg" class="small mb-2" role="status"></div>
+  <div id="upd-list" aria-live="polite"><p class="small text-secondary mb-0">Loading updates…</p></div>
+  <div class="upd-cols">
+    {% call fold('Nightly window', id='upd-window', icon='moon-stars') %}
+    <p class="small mb-1">Websites, add-ons and games update between these times on each host's own clock, one at a time. A website that answered visitors in the last minutes, or an add-on or game whose server has players on, waits for the next night. A failed website or add-on update is put back on what it ran before; any failure sends an alert.</p>
+    <p class="small text-secondary mb-2">OWASP recommends: automatic updates on for every item (Top 10 A03, Software Supply Chain Failures: patch in a timely fashion, never everything at once).</p>
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+      <div><label for="upd-start" class="form-label small mb-0">Starts</label>
+        <input type="time" id="upd-start" class="form-control form-control-sm" step="60"{% if not current_user.is_superadmin %} disabled{% endif %}></div>
+      <div><label for="upd-end" class="form-label small mb-0">Ends</label>
+        <input type="time" id="upd-end" class="form-control form-control-sm" step="60"{% if not current_user.is_superadmin %} disabled{% endif %}></div>
+      {% if current_user.is_superadmin %}
+      <button type="button" class="btn btn-sm btn-outline-primary" data-action="updSaveWindow"><i class="bi bi-check2"></i> Save</button>
+      {% endif %}
+    </div>
+    {% if not current_user.is_superadmin %}<div class="form-text">A superadmin sets the window.</div>{% endif %}
+    <div id="upd-window-msg" class="small mt-1" role="status"></div>
+    {% endcall %}
+    {% call fold('History', id='upd-history', icon='clock-history') %}
+    <p class="form-text mt-0 mb-1">Each time is on the clock of the host the update ran on, as the nightly window's are.</p>
+    <ul id="upd-history-list" class="list-unstyled small mb-0"></ul>
+    <button type="button" id="upd-history-more" class="btn btn-sm btn-link px-0" data-action="updHistoryMore" hidden>Show more</button>
+    {% endcall %}
+  </div>
+  {% else %}
+  <p class="small text-secondary">You don't manage anything that has updates.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+{% if allowed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/updates.js') }}"></script>{% endif %}
+{% endblock %}

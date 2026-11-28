@@ -10,6 +10,47 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.28] — 2026-11-28
+
+### Added
+
+- **One Updates page for everything.** A new Updates entry in the sidebar lists every update waiting for the
+  panel, your hosts, LinuxGSM, add-ons and websites: what each changes, what it costs and when it happens by
+  itself. Update everything safe now applies every update that kicks no players and needs no reboot.
+
+- **Websites and add-ons update by themselves at night.** Between 04:00 and 05:00 on each host's clock they
+  update one at a time, waiting while a site has visitors or a game server has players; a failed update goes
+  back to what it ran before and sends an alert. You can switch it off per item, but security updates still go
+  in.
+
+- **Websites block attackers, even behind Cloudflare.** Visitors who try too many sign-ins or scan for secret
+  files are blocked for a while by the web proxy itself, so it works behind a CDN or a tunnel. Each site lists
+  its blocked visitors with Unblock, and the web proxy card has the limits with OWASP's guidance beside them.
+
+- **One certificate for the whole website.** Paste your own certificate once on the site's Domains tab and
+  every domain it covers uses it, including ones you add later; the others stay automatic, with the reason
+  shown.
+- **Game updates are on the Updates page.** Each game server shows when a newer build of its game is out, with
+  Update now (players are warned in chat first) or Update when empty. Steam games update by themselves at
+  night when nobody is on; Minecraft and a few others stay manual by default, because a new release can lock
+  out players on older versions, and the page says why.
+
+### Changed
+
+- **A website's Overview says what update is waiting.** It shows how many updates are ready and what they are,
+  an Update now button (a few seconds offline), and the time it updates by itself tonight.
+
+### Fixed
+
+- **Tunnel mode always closes ports 80 and 443.** Switching a host's websites to a tunnel closes the public
+  web ports even when the tunnel's token is refused, and says so.
+
+- **A stopped database server is caught before Create.** Installing an app or creating a site database checks
+  the host again, so a stopped database server shows its Start button instead of failing halfway.
+
+- **WordPress Site Health sees the page cache.** Site Health now reports the panel's real page cache instead
+  of saying none was found, and cached pages no longer carry an empty Cache-Control header.
+
 ## [2026.11.27] — 2026-11-27
 
 ### Added
@@ -36,7 +77,6 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Restricted websites can allow Fastly's networks or a list from a web address.** Beside Cloudflare's
   one-tap list there is now Fastly's, and you can give an address the panel fetches an allow list from each
   day, keeping the last good copy if a fetch fails; you can turn that fetch off under Outside services.
-
 ### Fixed
 
 - **Website pages reached through WordPress's pretty links load again.** On websites, robots.txt, the favicon,
@@ -52,7 +92,6 @@ dated section below lists what that day's releases changed, newest first; the nu
   failed installs show why and Retry works, the Overview shows real memory, disk and CPU, saving the proxy's
   security settings applies them, tunnel mode serves sites, and settings that do not apply are shown greyed
   out with the reason instead of hidden.
-
 ### Security
 
 - **Add-on downloads go only to public addresses.** The panel's downloads of DB-IP's country database and of

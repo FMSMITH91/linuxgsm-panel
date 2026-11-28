@@ -33,6 +33,7 @@ WORKERS = (
     ("telegram-bot", None), ("discord-bot", None),
     ("terminal-idle-sweeper", None), ("terminal-revocation-sweeper", None),
     ("hub-lag-watch", 1), ("wipe-schedule", 60), ("restore-recover", 600), ("sftp-service", None),
+    ("auto-updates", 300),
 )
 # Loops that only exist on some installs: absent is not dead. The hub-lag watch runs only in a
 # process app.py started under eventlet (debug_report/process.py).

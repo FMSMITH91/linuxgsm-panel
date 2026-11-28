@@ -112,7 +112,9 @@ unix socket in the proxy's runtime folder (owner-only; never a network port), so
 site's pages through the cache module's own interface without restarting the proxy; with the page cache off
 the admin interface stays off. The panel builds it on each host that has a web
 proxy when a superadmin turns on **Page cache in the web proxy** in the Websites security settings (and again
-after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
+after the plain proxy is installed while it is on). Turning it off applies at once: each host with an online
+site loads the configuration without the cache, and its admin socket goes with it. The build runs in the
+background and takes a few minutes;
 a failure is shown on the security settings card, saying which part failed (the build, the check or the
 install), with the reason and the build's last lines in the panel's log. A container
 build from the pinned Caddy builder image runs `xcaddy` with the module at the exact version the catalog

@@ -95,10 +95,10 @@ def _basics233():
        (_osv233.parse_form({_osv233.UPDATE_CHECK: "on"}), sorted(k for k, v in parsed.items() if v),
         sorted(parsed) == sorted(_osv233.KEYS)),
        ({}, sorted([_osv233.UPDATE_CHECK, _osv233.MODRINTH]), True))
-    eq("outside services: nine switches (the website allow lists read from an address among them), the confirm "
+    eq("outside services: ten switches (the website allow lists and the daily game update check among them), the confirm "
        "step on the update check and the breached-password check only",
        (len(_osv233.SERVICES), sorted(s["key"] for s in _osv233.SERVICES if s.get("confirm"))),
-       (9, sorted([_osv233.UPDATE_CHECK, _osv233.BREACH_CHECK])))
+       (10, sorted([_osv233.UPDATE_CHECK, _osv233.BREACH_CHECK])))
 
 
 # ── 2. the Settings card and its save ────────────────────────────────────────────────────────────
@@ -412,10 +412,10 @@ def _text233():
 
 def _js_docs233():
     js = _read233("panel", "static", "js", "settings.js")
-    hook = js[js.find("#sec-outside input[data-confirm-off]"):]
+    hook = js[js.find("getElementById('sec-outside')"):]
     check("settings.js: a switch that asks puts itself back on and goes off only from the dialog's Confirm, and "
-          "its outside-OWASP note follows it",
-          "box.checked = true;" in hook and "onConfirm: function(){ box.checked = false; sync(); }" in hook
+          "its outside-OWASP note follows it (every switch's note does: part324 flips one that does not ask)",
+          "box.hasAttribute('data-confirm-off')" in hook and "box.checked = true;" in hook and "onConfirm: function(){ box.checked = false; sync(); }" in hook
           and "note.classList.toggle('d-none', box.checked)" in hook
           and hook.find("box.checked = true;") < hook.find("confirmDialog("), hook[:400])
     check("server_workshop.js: titles switched off are said to be off, not that Steam did not answer",

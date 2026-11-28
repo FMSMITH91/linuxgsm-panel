@@ -898,6 +898,26 @@
       "GET"
     ]
   },
+  "GET /api/updates": {
+    "endpoint": "api_updates",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/updates/count": {
+    "endpoint": "api_updates_count",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_count"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/websites": {
     "endpoint": "api_websites",
     "guards": [
@@ -1196,6 +1216,16 @@
       "GET"
     ]
   },
+  "GET /updates": {
+    "endpoint": "updates_page",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:updates_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /users": {
     "endpoint": "manage_users",
     "guards": [
@@ -1242,6 +1272,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:website_backups_list"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/blocked": {
+    "endpoint": "website_blocked",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked"
     ],
     "methods": [
       "GET"
@@ -3376,6 +3416,70 @@
       "POST"
     ]
   },
+  "POST /api/updates/auto": {
+    "endpoint": "api_updates_auto",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_auto"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/game/<int:server_id>": {
+    "endpoint": "api_updates_game",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_updates_game"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/game/<int:server_id>/backup": {
+    "endpoint": "api_updates_game_backup",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_updates_game_backup"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/games/check": {
+    "endpoint": "api_updates_games_check",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_games_check"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/safe": {
+    "endpoint": "api_updates_safe",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:api_updates_safe"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/window": {
+    "endpoint": "api_updates_window",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_updates_window"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /commands/<int:cmd_id>/delete": {
     "endpoint": "delete_command",
     "guards": [
@@ -3840,11 +3944,31 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/blocked/unban": {
+    "endpoint": "website_blocked_unban",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked_unban"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/cache/purge": {
     "endpoint": "website_cache_purge",
     "guards": [
       "utils.py:decorated_view",
       "view:website_cache_purge"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/cert": {
+    "endpoint": "website_site_cert",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_site_cert"
     ],
     "methods": [
       "POST"

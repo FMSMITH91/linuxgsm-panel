@@ -127,6 +127,11 @@ class Website(db.Model):
     # install_steps_done the JSON list of steps finished, so a failure, or a panel restarted mid-install,
     # can undo exactly those and leave no half-installed site. The generated admin password is shown
     # once and never stored.
+    # The site's own certificate (Domains tab, "Certificate"): the chain once (public) and its private key once
+    # (encrypt_secret, at_rest.SECRET_COLUMNS, never shown again). Each domain it covers uses it (WebsiteDomain
+    # cert_mode 'site'); "" while the site's domains get automatic certificates.
+    own_cert_pem = db.Column(db.Text, default="")
+    own_key_secret = db.Column(db.Text, default="")
     app_recipe = db.Column(db.String(32), default="")
     app_version = db.Column(db.String(32), default="")
     install_step = db.Column(db.String(32), default="")
@@ -225,8 +230,10 @@ class WebsiteDomain(db.Model):
     Held to validation.website_domain here as well as in the routes, so no path can store an IP
     literal, a wildcard or a reserved name. dns_state / cert_state are what the last check found
     (unchecked|matching|mismatch|private|failed and pending|issued|failed); cert_error is a short
-    reason, never a whole log. cert_mode 'own' is a certificate the operator supplied instead of an
-    automatic one: own_key_secret holds its private key (encrypt_secret, at_rest.SECRET_COLUMNS).
+    reason, never a whole log. cert_mode 'site' is the site's own certificate (Website.own_cert_pem and
+    own_key_secret, stored once for every domain it covers). 'own' is a certificate pasted for this domain
+    alone, before a site had one (data migration 5 moved those to their site where it could); own_key_secret
+    holds its private key (encrypt_secret, at_rest.SECRET_COLUMNS).
     """
 
     __tablename__ = "website_domain"
@@ -243,7 +250,7 @@ class WebsiteDomain(db.Model):
     cert_state = db.Column(db.String(12), default="pending")
     cert_not_after = db.Column(db.DateTime, nullable=True)
     cert_error = db.Column(db.String(200), default="")
-    cert_mode = db.Column(db.String(8), default="acme")          # 'acme' | 'own'
+    cert_mode = db.Column(db.String(8), default="acme")          # 'acme' | 'site' | 'own'
     own_cert_pem = db.Column(db.Text, default="")                # a certificate chain is public
     own_key_secret = db.Column(db.Text, default="")              # encrypt_secret(private key PEM)
     created_at = db.Column(db.DateTime, default=utcnow)
@@ -259,7 +266,7 @@ class WebsiteDomain(db.Model):
 
     @validates("cert_mode")
     def _v_cert_mode(self, key, value):
-        return _website_choice(key, value, ("acme", "own"))
+        return _website_choice(key, value, ("acme", "own", "site"))
 
 
 class WebsiteProxy(db.Model):
@@ -295,6 +302,8 @@ class WebsiteProxy(db.Model):
     allow_url_nets = db.Column(db.Text, default="[]")
     allow_url_at = db.Column(db.DateTime, nullable=True)
     allow_url_error = db.Column(db.String(300), default="")
+    # Blocked visitors (services/websites_guard): the jails' numbers, the ban times and the allow list, as JSON.
+    guard = db.Column(db.Text, default="{}")
     installed_version = db.Column(db.String(40), default="")
     applied_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.String(200), default="")
@@ -336,3 +345,43 @@ class WebsiteProxy(db.Model):
     def url_nets(self):
         """The last good list read from `allow_url`, as canonical network strings."""
         return list(json.loads(self.allow_url_nets or "[]"))
+
+
+# ── data migration 5 (models._DATA_MIGRATIONS) ─────────────────────────────────────────────────────
+def _most_held(doms):
+    """The chain most of `doms` hold (the first such domain's on a tie)."""
+    counts = {}
+    for d in doms:
+        counts[d.own_cert_pem] = counts.get(d.own_cert_pem, 0) + 1
+    best = max(counts.values())
+    return next(d.own_cert_pem for d in doms if counts[d.own_cert_pem] == best)
+
+
+def _own_by_site():
+    """{site id: [its domains holding a certificate of their own, by id]}."""
+    out = {}
+    for d in WebsiteDomain.query.filter(WebsiteDomain.cert_mode == "own").order_by(WebsiteDomain.id).all():
+        if d.own_cert_pem and d.own_key_secret:
+            out.setdefault(d.website_id, []).append(d)
+    return out
+
+
+def site_certs_from_domains():
+    """Migration 5: an own certificate pasted per domain becomes its site's one certificate.
+
+    For each site with domains in cert_mode 'own' and no certificate of its own yet: the chain held by the most of
+    those domains (the first such domain on a tie) is stored once on the site, key and all (the ciphertext copied as
+    it is), and each domain that held that same chain uses the site's (cert_mode 'site', its own copy cleared). A
+    domain that held a different chain keeps it (still served for that domain alone). Safe to repeat: a site that has
+    a certificate is skipped, and a domain already on 'site' is no longer 'own'.
+    """
+    for site_id, doms in _own_by_site().items():
+        site = db.session.get(Website, site_id)
+        if site is None or site.own_cert_pem:
+            continue
+        pem = _most_held(doms)
+        site.own_cert_pem = pem
+        site.own_key_secret = next(d.own_key_secret for d in doms if d.own_cert_pem == pem)
+        for d in doms:
+            if d.own_cert_pem == pem:
+                d.cert_mode, d.own_cert_pem, d.own_key_secret = "site", "", ""

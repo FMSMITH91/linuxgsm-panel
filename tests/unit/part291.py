@@ -187,7 +187,7 @@ with _p9.app_context():
     db.session.get(User, _U291["off"]).password_hash = _bcrypt_era291(_K291)
     db.session.commit()
 check("upgrade: data migration 4 wraps a bcrypt-era password hash in Argon2id (layered), counted as run",
-      _layered291.startswith("layered$sha256$$2b$04$") and "$argon2id$" in _layered291 and _ver291 == 4,
+      _layered291.startswith("layered$sha256$$2b$04$") and "$argon2id$" in _layered291 and _ver291 == 5,
       repr((_layered291[:70], _ver291)))
 check("upgrade: ...the layered hash still takes the right password and refuses a wrong one, and is "
       "re-encoded at the next sign-in",

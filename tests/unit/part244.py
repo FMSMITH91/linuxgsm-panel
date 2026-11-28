@@ -276,7 +276,7 @@ eq("host sample: its answered ss is the port scan's answer for 5 s (the scan run
    "sample within those 5 s takes the scan's ports and runs no ss",
    (_s1_244["ports"], _scan244, _n2_244 - _n1_244, "ss -H" in _sent244[-1], _s2_244["ports"]),
    ({27015, 22}, {27015, 22}, 0, False, {27015, 22}))
-_empty_ss244 = _sp244.run(["bash", "-c", _core244._HOST_SS.replace("ss -H -ltnu 2>/dev/null", "true", 1)],  # nosec B603 B607
+_empty_ss244 = _sp244.run(["bash", "-c", _core244._HOST_SS.replace("ss -H -ltnue 2>/dev/null", "true", 1)],  # nosec B603 B607
                           capture_output=True, text=True, timeout=10, check=False).stdout
 _unshared244 = []
 for _out244 in ("PORT 27015\n", "PORTS 0\n", _empty_ss244):

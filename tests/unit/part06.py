@@ -6013,8 +6013,17 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 379, was 378: panel/routes/websites_settings.py's object cache connection settings (MANAGE_WEBSITE on the site, step-up).
 # 380, was 379: panel/routes/databases.py's start of a stopped database server (MANAGE_DATABASES and MANAGE_REMOTES,
 # step-up), the add-website dialog's fix for it.
-check("register_routes: every one of the 380 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 380,
+# 381, was 380: panel/routes/websites_domains.py's certificate of a whole site (POST /websites/<id>/cert, through
+# site_for like the other domain routes).
+# 383, was 381: panel/routes/websites_guard.py's Blocked visitors of a site and its Unblock (through site_for, the
+# site's manage permission, like the other per-site routes).
+# 389, was 383: panel/routes/updates.py's Updates page: the page, its list and the nav's count (each viewer sees what
+# they may update), the nightly window (superadmin), an item's automatic switch (who may update that item) and Update
+# everything safe now (step-up).
+# 392, was 389: panel/routes/updates_game.py's game rows: Update now / when empty and Back up first (UPDATE_SERVER on a
+# server the viewer can reach), and Check games now (VIEW_CONSOLE, the viewer's own servers).
+check("register_routes: every one of the 392 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 392,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -10131,6 +10140,8 @@ import glob as _anc_glob                                                        
 # Line parsers: `$` is correct because the pattern is matched against one line and the trailing
 # whitespace/newline is either absorbed by the pattern or captured on purpose.
 _ANCHOR_LINE_PARSERS = {
+    # LinuxGSM's check-update and update output, matched per line (re.M): "Update available" and "* Local build: x".
+    "_STATE_RE", "_LOCAL_RE", "_REMOTE_RE", "_BRANCH_RE",
     "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_UFW_NUMBERED_RE",
     "_IDT3_ROW_NOADDR_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE",
     # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs

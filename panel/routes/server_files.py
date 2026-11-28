@@ -1063,6 +1063,8 @@ def _cron_listing(app, gs):
             "there being none.")})
     if not grs_restore_running(gs.id):      # its crontab is set aside: never read the empty one as Off
         _sync_toggles_from_cron(gs, jobs)
+        from panel.services import updates as _upd
+        _upd.note_lgsm_cron(gs.id, jobs)     # the Updates page says whether a task updates LinuxGSM by itself
     # A failed task's output is withheld without VIEW_FILES (_cron_access); its Failed badge stays.
     return jsonify({"jobs": _cra.withhold_output(_sch.annotate(gs, jobs))})
 

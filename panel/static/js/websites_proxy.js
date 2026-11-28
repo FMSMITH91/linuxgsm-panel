@@ -87,11 +87,14 @@
     if (p.last_error) e.appendChild(WS.raw('span', 'd-block text-danger', p.last_error));
   }
   var MODE_NAME = {public: 'Public', restricted: 'Restricted', tunnel: 'Tunnel'};
+  function modeSummary(p) {
+    var sum = WS.el('wp-mode-summary');
+    if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
+  }
   function renderHost() {
     var p = cur();
     stateLine(p);
-    var sum = WS.el('wp-mode-summary');
-    if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
+    modeSummary(p);
     st.presets = (p.allow_presets || []).slice();
     setMode(p.exposure_mode || 'public');
     renderPresets();
@@ -105,7 +108,51 @@
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
     renderTools(p);
+    renderGuard(p.guard || {});
   }
+  // ── blocked visitors: the host's numbers, OWASP's words beside them (from the server), a note outside them ──
+  var GUARD_FIELDS = {login: 'wp-guard-login', scan: 'wp-guard-scan', findtime: 'wp-guard-findtime',
+    bantime: 'wp-guard-bantime', maxtime: 'wp-guard-maxtime'};
+  function renderGuard(g) {
+    if (!WS.el('wp-guard')) return;
+    setVal('wp-guard-on', g.enabled !== false);
+    setVal('wp-guard-increment', g.increment !== false);
+    Object.keys(GUARD_FIELDS).forEach(function (k) { setVal(GUARD_FIELDS[k], g[k]); });
+    Object.keys(g.owasp || {}).forEach(function (k) {
+      var e = WS.el('wp-guard-' + k + '-owasp');
+      if (e) e.textContent = String(g.owasp[k]);
+    });
+    var allow = WS.el('wp-guard-allow');
+    if (allow) allow.value = (g.allow || []).join('\n');
+    WS.show('wp-guard-f2b', g.fail2ban === 'absent');
+    window.wsGuardCheck();
+  }
+  window.wsGuardCheck = function () {
+    WS.show('wp-guard-on-note', switchOn('wp-guard-on') === false);
+    WS.show('wp-guard-increment-note', switchOn('wp-guard-increment') === false);
+    // OWASP's example of a fixed lockout is 10 minutes: a shorter first ban gets the note (it is still saved).
+    var ban = WS.el('wp-guard-bantime'), mins = ban ? Number(String(ban.value || '').trim()) : Number.NaN;
+    WS.show('wp-guard-bantime-note', Number.isFinite(mins) && mins > 0 && mins < 10);
+  };
+  // A save that applies the configuration again replaces what the status line said of the last apply: a refusal shows
+  // there too, so the line never still reads "checked and applied" above a refusal.
+  function appliedLine(d) {
+    if (d && d.success) WS.say('wp-status', '');
+    else WS.done(d, 'wp-status');
+  }
+  window.wsSaveGuard = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var body = {enabled: switchOn('wp-guard-on') === true, increment: switchOn('wp-guard-increment') === true,
+      allow: (WS.el('wp-guard-allow').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean)};
+    Object.keys(GUARD_FIELDS).forEach(function (k) { body[k] = String(WS.el(GUARD_FIELDS[k]).value || '').trim(); });
+    WS.stepUp(function () {
+      WS.say('wp-guard-msg', WS.T('Saving…'));
+      WS.post('/websites/proxy/settings', {host_id: st.host, guard: body}).then(function (d) {
+        appliedLine(d);
+        if (WS.done(d, 'wp-guard-msg') && WS.loadList) WS.loadList();
+      });
+    });
+  };
   function renderTools(p) {
     var svc = WS.el('wp-tunnel-service');
     if (svc) svc.textContent = p.tunnel_service || '';
@@ -213,6 +260,14 @@
       WS.post('/websites/proxy/settings', {host_id: st.host, exposure: body}).then(function (d) {
         var tok = WS.el('wp-token');
         if (tok) tok.value = '';
+        // The fold's summary says the mode now in force: a save the host refused to apply (a tunnel token
+        // Cloudflare refused) is still the saved mode, with its ports closed (the answer's `proxy`).
+        if (d && d.proxy) {
+          var p = cur();
+          Object.keys(d.proxy).forEach(function (k) { p[k] = d.proxy[k]; });
+          modeSummary(p);
+        }
+        appliedLine(d);
         if (WS.done(d, 'wp-msg') && WS.loadList) WS.loadList();
       });
     });

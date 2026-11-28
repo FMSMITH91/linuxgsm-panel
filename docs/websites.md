@@ -70,8 +70,10 @@ Every app needs a database server on the host. When it has none, the dialog says
 with **Set up databases** for a superadmin (MariaDB, reached from this machine only, the same setup as the
 Databases tab of a game server). The dialog follows the setup and makes **Create** available once the server is
 ready, with no reload; it reads the host's state again each time it opens. A database server that is installed
-but stopped gets **Start the database server** instead, which starts it and enables it at boot. The site's
-Database tab offers Set up databases too.
+but stopped gets **Start the database server** instead, which starts it and enables it at boot. **Create**
+asks the host again before anything is made, so a server that stopped after it was set up is caught there
+(with the Start button), not at the install's database step. The site's Database tab offers Set up databases
+too, and asks the host again before it creates a database.
 
 The admin password and the database password never appear on a command line or in a log: each reaches the
 installer as a file that only the site's account can read, removed when the step ends, and the installers'
@@ -145,7 +147,9 @@ the Websites page:
   connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
   applying again tries at once, even after several failures in a row. An apply waits a few seconds after
   starting the connector and says it did not start when it stopped in that time (Cloudflare refuses a
-  wrong token only once the connector has started). **Check the web proxy** on the card shows the proxy's
+  wrong token only once the connector has started). Switching to Tunnel closes ports 80 and 443 first, so
+  the sites are never reachable straight at the host while the mode says Tunnel, even when the connector
+  fails; a failed apply says the ports were closed. **Check the web proxy** on the card shows the proxy's
   version and state and, in tunnel mode, the connector's; **Apply again** applies the host's settings again.
 
 In Public and Restricted mode, ports 80 and 443 are opened in the host's firewall when the first site
@@ -192,6 +196,62 @@ includeSubDomains and preload are off by default because the panel cannot know t
 a customer's domain is served over HTTPS; the card notes each one while it is off. Preload only goes out
 together with includeSubDomains. Turning on the page cache builds the web proxy with it on the host, which
 takes a few minutes; until then the sites' page caches are left out and nothing breaks.
+
+### Blocked visitors
+
+A visitor that tries too many sign-ins on the websites, or asks for paths only scanners ask for, is blocked
+for a while by the web proxy itself (fail2ban counts, the proxy refuses). It works behind Cloudflare or a
+tunnel, where a firewall would only ever see Cloudflare's addresses: the proxy refuses the visitor's own
+address, as the trusted-proxy rules above decide it (a CDN's header is believed only from that CDN's
+networks). In Public mode the firewall blocks the address on ports 80 and 443 as well. A blocked visitor
+gets a 403 from every website on the host, before anything else runs (no cached page, no redirect), and
+nothing is reloaded or restarted for a ban.
+
+What is counted, per address:
+
+- **Sign-in attempts**: POSTs to the sign-in pages of the apps the panel installs (WordPress's
+  `wp-login.php` and `xmlrpc.php`, Drupal's `/user/login`, phpBB's `ucp.php?mode=login`, MyBB's
+  `member.php`, SMF's `index.php?action=login2`). WordPress answers 200 to a wrong password, so attempts
+  are counted, not failures: 10 in 10 minutes by default.
+- **Scanner requests**: paths nobody but a scanner asks for (`.env`, `.git`, backups of `wp-config.php`,
+  `server-status`, phpMyAdmin and the like) and the site's own **Block a path** rules: 3 in 10 minutes by
+  default.
+
+Only those requests are written to the web proxy's security log (`/var/log/lgsm-web-proxy/security.log`,
+readable by root alone, kept two days), and only the time, the visitor's address, the method, the site's
+name and the answer's status: no path, query, header or cookie. Every other request is logged only where a
+site's own access log is on, as before (a blocked visitor's refused requests are written to the security log
+too, with the same few fields). The log's folder is made, the web proxy's own, before the proxy checks a new
+configuration, and each site's names are tied to its security log whether or not its access log is on.
+
+Settings, per host, under **Blocked visitors** on the web proxy's card (superadmin): blocking on or off,
+the two limits, the window, the first ban (10 minutes by default, OWASP's example of a fixed lockout), a ban
+that grows for an address banned again (on by default, OWASP's exponential backoff), the longest ban (24
+hours by default; OWASP asks for temporary blocks) and addresses never to block. OWASP gives no number for
+a limit or a window; the card shows OWASP's words beside each field, and a note, never a block, when
+blocking or the growing ban is off, or the first ban is shorter than OWASP's 10 minutes (OWASP Authentication Cheat Sheet, "Login Throttling"; Credential
+Stuffing Prevention Cheat Sheet, "IP Mitigation and Intelligence"). Never blocked, whatever the settings:
+the host's own addresses, the loopback, your tailnet, every CDN preset's networks, the allow list above and
+the panel's login whitelist, so a CDN's own address is never blocked.
+
+Each website's **Rules** tab lists the addresses blocked while attacking it (why, since when and until
+when), with **Unblock**, and counts the host's other blocked addresses, which are kept off this website too
+(they attacked another one, so they are not named). A ban is listed on the site its counted requests asked for
+(never the site of a refused request), and a ban fail2ban puts back after a restart keeps that site. Until when
+is fail2ban's own end: a growing ban is raised by fail2ban a moment after it starts, and the list follows it.
+Unblock asks first, then lifts the address in fail2ban and in the web proxy, and its row leaves the list at once;
+an address already lifted on the host (fail2ban's `unbanip`) answers that it was already unblocked. Every ban, every ban's end and every Unblock is in the audit
+log, each end in its own words: the ban ran its time, it was lifted on the host (fail2ban's `unbanip`), or
+the jail stopped or restarted (a restart blocks the addresses whose ban is still running again). A ban is
+recorded within 30 minutes even when nobody opens the list, with the time it happened. Switching the
+exposure mode restarts the websites' two jails only, so the firewall ban comes or goes at once; live bans
+are kept. Blocking needs fail2ban on the host (the panel's installer puts it there); the card says when it
+is missing.
+
+The proxy has no request rate limiting of its own: Caddy's rate-limit module is not one of its official
+modules, has no tagged release to pin, would need the web proxy rebuilt on every host (as the page cache's
+optional build is), and keys on the address the proxy is connected from, which behind a CDN is the CDN's.
+The sign-in limit above is the throttle instead, keyed on the visitor's own address.
 
 ## Domains and certificates
 
@@ -245,13 +305,20 @@ stopped, say), the primary domain stays as it was and the answer says why.
 
 ### Your own certificate
 
-Each domain has a **Certificate** button on the Domains tab: **Automatic (Let's Encrypt)**, the default,
-or **Your own certificate**. For your own, paste the certificate followed by its intermediate
-certificates (a `fullchain.pem`), and its private key without a passphrase, then **Save**. A
-[Cloudflare Origin CA](#cloudflare) certificate is this case. Switch back to Automatic the same
-way at any time; the web proxy then gets a Let's Encrypt certificate for the domain again, and its copy of
-your certificate and key is removed from the host the next time its settings are applied (at once when the
-site is online).
+A website has one **Certificate** button, at the top of its Domains tab: **Automatic (Let's Encrypt)**,
+the default, or **Your own certificate**. For your own, paste the certificate followed by its intermediate
+certificates (a `fullchain.pem`), and its private key without a passphrase, once for the whole site, then
+**Save**. The panel checks it against each of the site's domains: every domain it covers uses it (a
+certificate for `example.org` and `*.example.org` covers both, pasted once), and every domain it does not
+cover stays automatic, listed with the reason. A domain you add later that the certificate covers uses it
+at once; its DNS check and when it goes online are unchanged. Each covered domain's line says **Uses the
+site's certificate**. A [Cloudflare Origin CA](#cloudflare) certificate is this case. Switch the site
+back to Automatic the same way at any time, one action for every domain; the web proxy then gets Let's
+Encrypt certificates again, and its copy of your certificate and key is removed from the host the next
+time its settings are applied (at once when the site is online). The certificate and key are stored once
+for the site, whatever the number of domains on them; a certificate pasted for one domain before this
+existed was moved to its site on the update (a domain whose certificate differed from the rest keeps its
+own).
 
 What is checked (OWASP Transport Layer Security Cheat Sheet, "Certificates"):
 
@@ -297,8 +364,8 @@ A domain whose DNS record is proxied by Cloudflare (the orange cloud) resolves t
 addresses. Two ways to give it a certificate:
 
 1. **Recommended: a Cloudflare Origin CA certificate.** In Cloudflare, open SSL/TLS > Origin Server and
-   create a certificate for the domain (or a wildcard for it). Paste the certificate and its private key
-   on the domain's **Certificate** button as **Your own certificate**. Then set Cloudflare's SSL/TLS mode
+   create a certificate for the domain and its wildcard. Paste the certificate and its private key once,
+   on the site's **Certificate** button as **Your own certificate**. Then set Cloudflare's SSL/TLS mode
    to **Full (strict)**, so Cloudflare checks the host's certificate on every connection. Only Cloudflare
    trusts an Origin CA certificate, so keep the record proxied; the panel notes this when you save.
 2. **Automatic (Let's Encrypt) through Cloudflare.** It works only while Cloudflare passes plain HTTP to
@@ -424,7 +491,10 @@ When the signed catalog has a newer image for a site (a security rebuild), or th
 writes for a site (its web server's settings, for example), the site's Overview offers **Update**, which installs
 it again from that image and restarts it (a few seconds offline; building a PHP image can take a few minutes
 first). Its files, databases, settings and secrets stay. A site installed before the panel recorded these is
-offered Update once. Saving a site's Settings restarts it only when one of its limits changed; the note and the
+offered Update once. The Overview says how many updates are ready and what they are, and when the site updates by
+itself: websites update in the nightly window (04:00-05:00 on the host's clock by default), one at a time, unless a
+visitor reached the site in the last minutes; a failed update puts the site back on the image it ran before. See
+[updates.md](updates.md). Saving a site's Settings restarts it only when one of its limits changed; the note and the
 access log alone never do.
 
 ## Access logs

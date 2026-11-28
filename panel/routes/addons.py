@@ -32,6 +32,7 @@ from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
 from panel.services import addon_web as _aw, addons as _ad, addons_catalog as _cat, reboot_words as _rw
 from panel.services import addons_bluemap as _bm, b3_control as _b3c, b3_players as _b3p, geoip as _geoip
+from panel.services import updates as _upd
 
 _DENIED = "Permission denied"
 _UNKNOWN = "This server can't run that add-on."
@@ -337,6 +338,7 @@ def _status_answer(gs):
         return _say(200, "Couldn't read this server's add-ons: the host did not answer. Try again.", unread=True)
     st = _ad.parse_status(out)
     _b3p.remember(gs.id, st["addons"])   # the B3 players section reads B3's database by this name
+    _upd.note_addons(gs.id, st["addons"])     # the Updates page lists the add-ons with an update
     if not has_permission(current_user, MANAGE_ADDONS):
         return jsonify({"success": True, "manage": False, "addons": _page_rows(gs, st["addons"])})
     why = _ad.runtime_refusal(st["os"], st["podman"])

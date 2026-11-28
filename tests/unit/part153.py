@@ -310,7 +310,8 @@ finally:
 _REUSERS153 = {
     ("ci.yml", "checks"): ("checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}",
                            ("Run all checks (compile, lint, unit, smoke, shellcheck)",
-                            "Run the root-only unit checks, as root")),
+                            "Run the root-only unit checks, as root",
+                            "Every unit part ran here, none left out by a selection")),
     ("ci.yml", "coverage"): ("coverage · ${{ matrix.part }}", ("Measure",)),
     ("ci.yml", "js-coverage"): ("js coverage · ${{ matrix.part }}", ("Measure",)),
     ("ci.yml", "gamedig-lockfile"): ("gamedig lockfile (node ${{ matrix.node }})",
@@ -321,6 +322,12 @@ _REUSERS153 = {
 _ON_REUSE153 = {
     ("ci.yml", "checks", "Documentation-only pull request, so the unit suite alone (it reads the docs)"):
         "steps.scope.outputs.docs_only == 'true' && matrix.docs",
+    # A pull request's unit selection runs on pull requests only, so never beside a reuse (a push to main);
+    # the step that lets main reuse a pass runs only when no selection left a part out.
+    ("ci.yml", "checks", "Which unit parts can this pull request's change affect?"):
+        "github.event_name == 'pull_request' && " + _RUN153 + " && startsWith(matrix.part, 'unit ')",
+    ("ci.yml", "checks", "Every unit part ran here, none left out by a selection"):
+        _RUN153 + " && steps.reuse.outputs.reuse != 'true' && steps.select.outputs.parts == ''",
     ("ci.yml", "coverage", "Take the report the pull request's run made on the same tree"):
         _RUN153 + " && steps.reuse.outputs.reuse == 'true'",
     ("ci.yml", "coverage", "Upload the report"): _RUN153,

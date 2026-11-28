@@ -166,13 +166,15 @@ def database_missing(remote, probe=False):
     """The add dialog's entry for a host with no database server an app could use, or None.
 
     Read from what the Databases code knows (its stored server, or its 10-minute probe); `probe` True asks the host
-    when nothing is known (the app install's own check, before anything is made). Nothing known and nothing asked,
-    or a host that did not answer, is no entry: the install's database step still refuses then.
+    now, even with a stored server (the app install's own check, before anything is made): a server set up a few
+    minutes ago and stopped since read as ready from its row, so the install went ahead and failed at its database
+    step instead of offering the Start button. Nothing known and nothing asked, or a host that did not answer, is no
+    entry: the install's database step still refuses then.
     """
     from panel.routes import databases as _d
     if remote is None:
         return None
-    state = _d.host_state(remote, may_probe=probe)[0]
+    state = _d.host_state(remote, may_probe="force" if probe else False)[0]
     if state in ("ready", "unknown", "unreadable"):
         return None
     if state == "unsupported" and _d.probe_detail(remote) == "stopped":
@@ -318,10 +320,23 @@ def _usage(probe):
 
 
 def _image(site, probe):
-    """The Software line and whether Update would bring the site a newer image (websites.update_available)."""
+    """The Software line and whether Update would bring the site a newer image (websites.update_available).
+
+    With an update waiting: `ready` ("N updates ready: what") and `when` (the nightly window's time, or why it
+    waits), the Overview's words for it (routes/updates.site_changes, site_schedule), and `note` while automatic
+    updates are off for it.
+    """
+    from panel.routes import updates as _ru
     from panel.routes.websites import update_available
     name, version = _image_ref(site, probe)
-    return {"name": name, "version": version, "update_available": update_available(site)}
+    out = {"name": name, "version": version, "update_available": update_available(site)}
+    if out["update_available"]:
+        what = _ru.site_changes(site)
+        sched = _ru.site_schedule(site)
+        out.update(ready=i18n.tr(i18n.Sentence("{n} update(s) ready: {what}", n=len(what), what=" ".join(what))),
+                   when=sched["when"], note=sched["note"], security=sched["security"], auto=sched["auto"],
+                   cost=sched["cost"])
+    return out
 
 
 def _image_ref(site, probe):
@@ -461,7 +476,7 @@ def _failed_logs(site):
 def site_answer(site, probe, install):
     """GET /api/websites/<id>."""
     from panel.routes.websites import is_admin, tunnel_mode
-    from panel.routes.websites_domains import domain_json
+    from panel.routes.websites_domains import domain_json, site_cert_json
     from panel.services import website_dns
     admin = is_admin(current_user, site)
     manage = admin or _holds(site, MANAGE_WEBSITE)
@@ -469,6 +484,7 @@ def site_answer(site, probe, install):
     tunnel = tunnel_mode(site.remote_id)
     out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": _failed_logs(site),
            "domains": [domain_json(site, d, tunnel) for d in site.domains], "tunnel": _tunnel_part(tunnel),
+           "site_cert": site_cert_json(site),
            "dns": {"a": [v for t, v in records if t == "A"], "aaaa": [v for t, v in records if t == "AAAA"]},
            "can": {"manage": manage, "files": _holds(site, EDIT_WEBSITE_FILES), "admin": admin}}
     if manage:

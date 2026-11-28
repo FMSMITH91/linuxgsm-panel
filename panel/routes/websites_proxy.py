@@ -44,6 +44,7 @@ S_NOT_APPLIED = "Not saved: the web proxy refused the new settings, so it kept t
 _UNSET = object()
 S_CACHE_BUILDING = ("Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; "
                     "the websites' page caches start when it is done.")
+S_TUNNEL_CLOSED = "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel."
 
 
 def _remote():
@@ -82,7 +83,36 @@ def proxy_json(row):
             "allow_url": row.allow_url or "", "allow_url_nets": row.url_nets(), "allow_url_error": row.allow_url_error or "",
             "allow_url_at": row.allow_url_at.strftime("%Y-%m-%d") if row.allow_url_at else "",
             "allow_url_on": _wau.allowed(), "installed_version": row.installed_version or "",
-            "last_error": row.last_error or ""}
+            "last_error": row.last_error or "", "guard": guard_json(row)}
+
+
+def guard_json(row):
+    """The host's blocked-visitors settings as the card shows them: minutes and hours, OWASP's words, the notes."""
+    from panel.services import websites_guard as _wg
+    s = _wg.settings(row.guard)
+    return {"enabled": s["enabled"], "login": s["login"], "scan": s["scan"], "findtime": s["findtime"] // 60,
+            "bantime": s["bantime"] // 60, "increment": s["increment"], "maxtime": s["maxtime"] // 3600,
+            "allow": s["allow"], "owasp": {k: i18n.tr(v) for k, v in _wg.OWASP_TEXT.items()},
+            "notes": {k: i18n.tr(v) for k, v in _wg.owasp_notes(s).items()},
+            "fail2ban": (_sw.GUARD_STATE.get(row.remote_id) or {}).get("fail2ban", "")}
+
+
+def _save_guard(remote, row, form):
+    """POST the card's Blocked visitors settings: checked, stored, applied with the proxy's configuration, audited."""
+    from panel.services import websites_guard as _wg
+    before = _wg.settings(row.guard)
+    values, problems = _wg.parse(form, before)
+    if problems:
+        return _w.say(400, " ".join(i18n.tr(p) for p in problems))
+    row.guard = json.dumps(values, sort_keys=True)
+    db.session.commit()
+    ok, said = _apply(remote, row)
+    detail = "blocked visitors %s: sign-in %d, scanner %d per %d s, ban %d s%s up to %d s, %d allowed" % (
+        "on" if values["enabled"] else "off", values["login"], values["scan"], values["findtime"], values["bantime"],
+        " growing" if values["increment"] else "", values["maxtime"], len(values["allow"]))
+    log_action(current_user, "website_guard_settings", target=remote.name, remote=remote, success=bool(ok),
+               detail=detail + ("" if ok else "; not applied: %s" % i18n.tr(said)))
+    return _w.done(ok, said or "Saved and applied.", proxy=proxy_json(row))
 
 
 def _cidrs(data, problems):
@@ -290,11 +320,13 @@ def _restore_options(before):
 def _apply_options(changed):
     """Apply changed proxy options to every host with an online site: (ok, sentence, [hosts applied]).
 
-    Only the options the proxy's configuration reads (websites_view.PROXY_OPTION_NAMES) are applied; the page
-    cache's own switch is applied by its build (cache_build_start). Stops at the first host that refuses.
+    Only the options the proxy's configuration reads (websites_view.PROXY_OPTION_NAMES) are applied. The page
+    cache's switch turned on is applied by its build (cache_build_start, minutes); turned off, it is applied here
+    at once like any other option: the configuration without the cache (and its admin socket) is loaded now.
+    Stops at the first host that refuses.
     """
     from panel.routes.websites_view import PROXY_OPTION_NAMES
-    if not {k for k in changed if k != "cache_build"} & set(PROXY_OPTION_NAMES):
+    if not {k for k in changed if k != "cache_build" or not changed[k]} & set(PROXY_OPTION_NAMES):
         return True, "", []
     hosts = sorted({s.remote_id for s in Website.query.filter_by(enabled=True)})
     done = []
@@ -378,12 +410,23 @@ def _cache_build_worker(app, remote_id, uid):
 
 
 def _apply(remote, row):
-    """Apply the host's proxy settings now: tunnel, then ports and proxy. -> (ok, sentence)."""
+    """Apply the host's proxy settings now: tunnel, then ports and proxy. -> (ok, sentence).
+
+    In tunnel mode ports 80 and 443 are closed first, whatever becomes of the tunnel. A token the tunnel's provider
+    refused, or a connector that did not start, ended the apply before its firewall step, so the public rules of the
+    mode before stayed open (the sites still reachable straight at the host) while the saved mode said tunnel. A
+    failed apply then says the ports were closed (or why they were not). last_error keeps the tunnel's own sentence,
+    which _note_tunnel clears once the connector connects.
+    """
+    tunnel = row.exposure_mode == "tunnel"
+    closed = _w.host_call(_sw.ports_apply, remote, row, False) if tunnel else (True, "")
     ok, said = _w.host_call(_sw.tunnel_apply, remote, row)
     if ok:
         ok, said = _w.reconcile_proxy(remote)
     row.last_error = "" if ok else i18n.tr(said)[:200]
     db.session.commit()
+    if tunnel and not ok:
+        said = i18n.Sentences(said, S_TUNNEL_CLOSED if closed[0] else closed[1])
     return ok, said
 
 
@@ -458,6 +501,8 @@ def register(app):
             return _save_options(form["options"])
         remote = _remote()
         row = _w.proxy_row(remote.id)
+        if isinstance(form.get("guard"), dict):
+            return _save_guard(remote, row, form["guard"])
         exposure = form.get("exposure") if isinstance(form.get("exposure"), dict) else form
         changes, problems = parse_settings(row, exposure)
         if problems:

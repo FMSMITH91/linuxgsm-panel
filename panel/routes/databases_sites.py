@@ -58,7 +58,7 @@ def create_for(site, slug):
         return False, i18n.Sentence(S_CAP, n=_cap()), None, ""
     if GameDatabase.query.filter_by(remote_id=site.remote_id, name=name).first() is not None:
         return False, S_EXISTS, None, ""
-    state, hd, _p = _d.host_state(site.remote, may_probe=True)
+    state, hd, _p = _d.host_state(site.remote, may_probe="force")    # now: a row's "ready" may be stale
     if state != "ready":
         return False, _d._NOT_READY if state != "unreadable" else _d._UNREAD, None, ""
     secret, maxconn = _dbs.new_password(), _d._maxconn()

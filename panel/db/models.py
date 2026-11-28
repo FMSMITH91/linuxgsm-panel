@@ -15,7 +15,7 @@ from sqlalchemy.orm import validates
 from panel.db.sqla import db
 from panel.db.history_models import HostHourly, MetricHourly
 from panel.db.website_models import (Website, WebsiteDomain, WebsiteProxy,
-                                     group_websites)
+                                     group_websites, site_certs_from_domains)
 
 _log = logging.getLogger("panel.models")
 
@@ -833,6 +833,7 @@ class GameServer(db.Model):
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
     stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
+    update_pending = db.Column(db.Boolean, default=False)   # queued to update its game once players leave
     # The panel is rebooting this server's host: what it found the server doing, who brings it
     # back, and how far that has got (JSON, see panel/services/host_reboot.py). NULL otherwise.
     # In the database, not in memory, because the panel host's own reboot takes the panel with it.
@@ -1127,7 +1128,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
     "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
     "addon_install", "addon_start", "addon_stop", "addon_remove", "addon_refused", "addon_settings", "addon_update",
-    "addon_geoip",
+    "addon_geoip", "update_skipped", "update_when_empty", "update_warned", "updates_auto", "update_left_stopped",
     "b3_player_search", "b3_player_view", "b3_penalties_view", "b3_unban", "b3_kick", "b3_warn", "b3_alerts_set",
     "addon_web_opened", "addon_web_refused",
 })
@@ -1137,7 +1138,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start", "website_guard_settings",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -1145,7 +1146,7 @@ AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # about itself (autoblock_toggle's panel variant targets 'panel host'). A host named like one of
 # those targets must not inherit the panel host's rows.
 AUDIT_HOST_ACTIONS_CALL_ONLY = frozenset({
-    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle",
+    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle", "website_ban", "website_unban",
 })
 
 
@@ -1920,17 +1921,16 @@ _LIGHT_MIGRATIONS = {
     ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
     ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
     ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+    ("game_server", "update_pending"): "ALTER TABLE game_server ADD COLUMN update_pending BOOLEAN DEFAULT 0",
     # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
     # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
     # rather than withholding it from a row whose cause nobody can name any more.
-    ("game_server", "install_error"):
-        "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+    ("game_server", "install_error"): "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
     # NULL on upgrade: a reason recorded before this column shows as the English it was written in.
     ("game_server", "install_error_i18n"): "ALTER TABLE game_server ADD COLUMN install_error_i18n TEXT",
     ("game_server", "install_retryable"):
         "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
-    ("game_server", "content_games"):
-        "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    ("game_server", "content_games"): "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
     # NULL on upgrade: no reboot the panel made before this column existed has anything to restore.
     ("game_server", "reboot_restore"): "ALTER TABLE game_server ADD COLUMN reboot_restore TEXT",
     # NULL on upgrade: every existing TeamSpeak 3 server gets the one-time ServerQuery close.
@@ -2011,6 +2011,11 @@ _LIGHT_MIGRATIONS = {
     ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
     # Empty on upgrade: a domain checked as cdn before then went through Cloudflare, the only preset (website_dns).
     ("website_domain", "dns_cdn"): "ALTER TABLE website_domain ADD COLUMN dns_cdn VARCHAR(20) DEFAULT ''",
+    # Empty on upgrade: a site's own certificate was pasted per domain before (data migration 5 moves those).
+    ("website", "own_cert_pem"): "ALTER TABLE website ADD COLUMN own_cert_pem TEXT DEFAULT ''",
+    ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
+    # The defaults on upgrade (blocking on): websites_guard.settings fills every key an empty object lacks.
+    ("website_proxy", "guard"): "ALTER TABLE website_proxy ADD COLUMN guard TEXT DEFAULT '{}'",
 }
 
 
@@ -2214,6 +2219,7 @@ _DATA_MIGRATIONS = (
     (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
     (_fpm_grant_file_permissions, "PRAGMA user_version = 3"),
     (_layer_legacy_password_hashes, "PRAGMA user_version = 4"),
+    (site_certs_from_domains, "PRAGMA user_version = 5"),
 )
 
 

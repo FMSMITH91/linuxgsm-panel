@@ -23,6 +23,7 @@ MODRINTH = "outside_modrinth"
 PUBLIC_IP = "outside_public_ip"
 DBIP = "outside_dbip"
 WEBSITE_ALLOW_URL = "outside_website_allow_url"
+GAME_UPDATE_CHECK = "outside_game_update_check"
 # The breached-password check (Have I Been Pwned's range API) keeps the key it was built with.
 BREACH_CHECK = "breach_check_online"
 
@@ -64,6 +65,10 @@ SERVICES = (
     {"key": WEBSITE_ALLOW_URL, "label": "Website allow lists read from an address (the address you enter)",
      "note": "Only for a web proxy in Restricted mode with a list's address set: the panel reads that list when it is "
              "saved and once a day. Off: nothing is read, and the host keeps the last list it read."},
+    {"key": GAME_UPDATE_CHECK, "label": "Daily game update check (each host asks Steam or the game's own source)",
+     "note": "Off: the panel no longer runs LinuxGSM's check-update by itself, so the nightly window updates no game; "
+             "Check games now and the server page's check-update still ask when you press them.",
+     "owasp": "OWASP recommends on."},
 )
 KEYS = tuple(s["key"] for s in SERVICES)
 

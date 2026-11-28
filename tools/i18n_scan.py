@@ -42,6 +42,8 @@ import html
 import json
 import os
 import re
+import sys
+import types
 from html.parser import HTMLParser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1480,7 +1482,42 @@ def _py_ignored(lines, node):
 # that edits a file (a mutation, a temp tree) changes the fingerprint, so it is scanned afresh. The
 # parsed trees are NOT kept: holding every file's tree for the rest of the suite raised the unit
 # run's peak memory from 2.2 GB to 2.9 GB.
-_MEMO = {}
+#
+# One cache for every copy of this module in a process, not one per copy: the unit suite loads it
+# under its own name in about twenty parts, and each copy scanned the whole tree again (16-30 s a part
+# on a fast machine; part69, part71 and part72 alone were minutes on CI's 22.04 leg, beside the same
+# shard run as root). Two copies share an answer only when their functions' code and their plain
+# constants are the same (_code_identity), so a copy a check has changed computes its own.
+_SHARED = "_i18n_scan_shared_memo"
+_MEMO_MAX = 64
+
+
+def _memo_store():
+    """The process-wide cache dict (a module in sys.modules holds it, so every copy finds the same one)."""
+    holder = sys.modules.get(_SHARED)
+    if not isinstance(getattr(holder, "memo", None), dict):
+        holder = types.ModuleType(_SHARED)
+        holder.memo = {}
+        sys.modules[_SHARED] = holder
+    return holder.memo
+
+
+def _code_identity():
+    """What a copy's answers depend on besides the files: its source, unpatched, and its plain constants.
+
+    A copy whose functions were replaced after it loaded (a check standing one in) is its own identity
+    and shares nothing.
+    """
+    g = globals()
+    if any(g.get(name) is not fn for name, fn in _DEFINED.items()):
+        return ("changed", id(g))
+    h = hashlib.blake2b(_SOURCE_DIGEST, digest_size=16)
+    for name, val in sorted(g.items()):
+        if isinstance(val, (str, int, float, tuple, frozenset, list, dict, set)) and not name.startswith("__"):
+            text = repr(val)
+            if " at 0x" not in text:    # an object's address differs per copy and says nothing of its value
+                h.update(name.encode() + b"\0" + text.encode())
+    return h.digest()
 
 
 def _fingerprint(root):
@@ -1503,13 +1540,15 @@ def _memo(kind, root, compute):
     one parse of each root, never a parse per edit (each one holds every scanned file's tree).
     """
     fp = _fingerprint(root)
-    key = (kind, fp[0])
-    held = _MEMO.get(key)
+    memo = _memo_store()
+    key = (kind, fp[0], _code_identity())
+    held = memo.pop(key, None)
     if held is None or held[0] != fp:
-        if len(_MEMO) > 64:     # many temp roots: each is scanned once, keep the cache small
-            _MEMO.clear()
-        _MEMO[key] = (fp, compute())
-    return _MEMO[key][1]
+        while len(memo) >= _MEMO_MAX:   # many temp roots, each scanned once: the oldest entry goes
+            memo.pop(next(iter(memo)))
+        held = (fp, compute())
+    memo[key] = held                    # the newest at the end
+    return held[1]
 
 
 def _py_trees(root):
@@ -2382,7 +2421,6 @@ def literal_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
 
 
 def _main():
-    import sys
     show_all = "--all" in sys.argv
     found, dynamic = scan_templates()
     catalog = load_catalog("es")
@@ -2423,6 +2461,12 @@ def _print_dynamic(dynamic, catalog):
     del catalog
     for text, where in sorted(dynamic.items(), key=lambda kv: sorted(kv[1])[0]):
         print("  DYNAMIC  [%s] %r" % (",".join(sorted(where))[:40], text[:100]))
+
+
+# What _code_identity compares against: this copy's source and the functions it defined, as loaded.
+with open(__file__, "rb") as _src_fh:
+    _SOURCE_DIGEST = hashlib.blake2b(_src_fh.read(), digest_size=16).digest()
+_DEFINED = {_n: _f for _n, _f in globals().items() if isinstance(_f, types.FunctionType)}
 
 
 if __name__ == "__main__":
