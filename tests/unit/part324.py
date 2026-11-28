@@ -310,6 +310,19 @@ def _s4_own_port(host, su):
        out["own"], (False, [], "online", "online"))
 
 
+def _s4_no_account(host, su):
+    """A row read without its account (a stand-in, a partial row) never raises out of the status read."""
+    from panel.routes import api as _api
+    held = _ps324.Listening({25565}, {25565: {"p324pmc"}})
+    row = _NS324(id=987654, installed=True, status="offline", port=25565, game_type="mc")
+    try:
+        got = _api._status_flips(_p9, [([row], host, held)])
+    except AttributeError as e:
+        got = "raised %s" % e
+    eq("server list status (api._status_flips, a row without its account): it never raises, and counts every socket "
+       "on its port as before", got, ({"online": [987654], "offline": []}, {987654: "online"}))
+
+
 # ── 5. The window leaves a server stopped: History says so ─────────────────────────────────────────
 _STEAM324 = ("Update available\n* Local build: 12345678\n* Remote build: 12399999\n* Branch: public\n"
              "https://steamdb.info/app/4020/history\n")
@@ -647,6 +660,28 @@ def _s7_unblock_asks():
 
 
 # ── 8. An apply loads through the admin socket when both sides have it ────────────────────────────
+# The admin socket the configuration names, and the Linux abstract socket that stands in for it (no file, so no
+# folder and no path-length limit to mind): the helper's `socket` is shimmed to connect there instead.
+_ADMIN_PATH324 = "/run/lgsm-unit-p324/admin.sock"
+
+
+class _SocketShim324:
+    """The helper's `socket` module with AF_UNIX connects to _ADMIN_PATH324 sent to `abstract` instead."""
+
+    AF_UNIX, SOCK_STREAM = _socket324.AF_UNIX, _socket324.SOCK_STREAM
+
+    def __init__(self, abstract):
+        self.abstract = abstract
+
+    def socket(self, family, kind):
+        abstract = self.abstract
+
+        class _Sock(_socket324.socket):
+            def connect(self, address):
+                return super().connect(abstract if address == _ADMIN_PATH324 else address)
+        return _Sock(family, kind)
+
+
 def _admin_server324(path, got):
     """A unix socket at `path` answering one request 200, its bytes kept in got["req"]."""
     srv = _socket324.socket(_socket324.AF_UNIX, _socket324.SOCK_STREAM)
@@ -703,11 +738,12 @@ def _apply324(d, old_text, new_text, admin):
         with open(conf, "w", encoding="utf-8") as fh:
             fh.write(text)
         return True
-    sock = os.path.join(d, "admin.sock")
+    sock = "\0lgsm-unit-p324-%s" % os.urandom(8).hex()
     server = _admin_server324(sock, got) if admin else None
     me = _NS324(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_name="lgsmweb")
     seams = _Seams322(WEB_PROXY_BIN=_shutil324.which("true") or "/bin/true", pwd=_NS324(getpwnam=lambda n: me),
-                      WEB_PROXY_CONF=conf, WEB_PROXY_CERTS=os.path.join(d, "certs"), WEB_PROXY_ADMIN=sock,
+                      WEB_PROXY_CONF=conf, WEB_PROXY_CERTS=os.path.join(d, "certs"), WEB_PROXY_ADMIN=_ADMIN_PATH324,
+                      socket=_SocketShim324(sock),
                       WEB_START_POLL=0, resolve=lambda name: name, _run_quiet=_quiet, _web_validated=_validated,
                       _web_listen_ok=lambda text, pw: (text, ["127.0.0.1"]), _web_write=lambda path, data, mode, *a:
                       open(path, "wb").write(data), **units)
@@ -727,14 +763,12 @@ def _apply324(d, old_text, new_text, admin):
 def _s8_reload():
     head = _H322.WEB_CONF_HEAD + "\n{\n%s\n\tpersist_config off\n}\n"
     sock_line = "\tadmin unix/%s|0200"
-    d = _tf324.mkdtemp(prefix="p324a-", dir="/tmp")  # nosec B108 - private (0700); a unix socket path stays under 108 bytes
+    d = _tf324.mkdtemp(prefix="lgsm-unit-p324-proxy-")
     try:
-        line = sock_line % os.path.join(d, "admin.sock")
+        line = sock_line % _ADMIN_PATH324
         cache_on = head % line + "a.example.org {\n\trespond 200\n}\n"
         cache_on2 = head % line + "b.example.org {\n\trespond 200\n}\n"
         on = _apply324(d, cache_on, cache_on2, True)
-        if os.path.exists(os.path.join(d, "admin.sock")):
-            os.unlink(os.path.join(d, "admin.sock"))
         off = _apply324(d, head % "\tadmin off" + "a.example.org {\n}\n", head % "\tadmin off" + "b.example.org {\n}\n",
                         False)
     finally:
@@ -811,6 +845,7 @@ _HOST324 = (
     _s2_site,
     _s3_lifted,
     _s4_own_port,
+    _s4_no_account,
     _s5_left_stopped,
 )
 _GAME324 = (
