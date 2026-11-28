@@ -93,11 +93,11 @@ def _check(site, r, p, new):
     return _w.host_call(_sw.db_reaches, site.remote, site, values, prefix or "", db_port)
 
 
-def _change(site, r, hd, p, part, old, new):
-    """Change one part, the app's settings ("app") or the database's user ("db"), from `old` to `new`."""
+def _change(site, r, hd, p, part, current, wanted):
+    """Change one part, the app's settings ("app") or the database's user ("db"), from `current` to `wanted`."""
     if part == "app":
-        return _to_app(site, p, old, new)
-    return _dbs.set_password(site.remote, hd, r.name, new)
+        return _to_app(site, p, current, wanted)
+    return _dbs.set_password(site.remote, hd, r.name, wanted)
 
 
 def _undo(site, r, hd, p, done, old, new, why):
