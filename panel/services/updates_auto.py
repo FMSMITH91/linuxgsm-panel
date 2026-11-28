@@ -9,8 +9,10 @@ whose image differs from the catalog's (routes/addons_change.update_reason), whe
 it or the update is a security one (the signed catalog's `security` section): security updates are applied
 even where an item's automatic updates are off. A game server's game whose newer build the daily check found
 (services/game_updates), when its automatic updates are on (a default per game family) and no scheduled task of
-its own runs LinuxGSM's update (game_updates_run.update_game). Panel, host packages and LinuxGSM keep their own
-settings (the update check, unattended-upgrades on each host, a server's update-lgsm task).
+its own runs LinuxGSM's update (game_updates_run.update_game): its crontab is read as the game account each
+time (services/updates.read_lgsm_cron), and one that could not be read leaves it alone that night (CRON_UNREAD).
+Panel, host packages and LinuxGSM keep their own settings (the update check, unattended-upgrades on each host, a
+server's update-lgsm task).
 
 THE DAILY CHECK. Each pass also reads one game server's check-update (game_updates.check_pass): the one read
 longest ago, about once a day each, never while the panel runs something else on it.
@@ -43,6 +45,8 @@ ACTOR = "automatic"
 _DONE = {}                 # item ref -> the window key it was tried in
 RUN_LOCK = threading.Lock()
 SITE_STATES = ("running", "stopped", "failed")
+# A game update the window leaves alone: whether a scheduled task of its own updates it is not known.
+CRON_UNREAD = "its scheduled tasks could not be read, so whether one of them updates it is not known"
 
 
 def loop(app):
@@ -309,10 +313,15 @@ def _game_pass(app, gs_id, now):
         return
     cfg, ref = U.settings(), "game:%d" % gs.id
     key = _due(ref, gs.remote, cfg, now)
-    if key is None or not U.game_auto_on(gs, cfg) or (U.lgsm_cron_seen(gs.id) or {}).get("game"):
+    if key is None or not U.game_auto_on(gs, cfg):
         return
     _DONE[ref] = key
-    why = game_busy(gs)
+    # Its crontab read now, as the game account: what was remembered is empty after a panel restart, and a
+    # crontab that could not be read is not one without an update task.
+    cron = U.read_lgsm_cron(gs)
+    if cron is not None and cron.get("game"):
+        return
+    why = CRON_UNREAD if cron is None else game_busy(gs)
     if why:
         _gur._skipped(gs, why, ACTOR)
         return

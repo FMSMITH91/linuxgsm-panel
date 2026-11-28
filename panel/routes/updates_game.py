@@ -62,22 +62,32 @@ WHEN_WINDOW = {"now": "By itself now, in tonight's window (until {end}, the host
                "next": "By itself the next night at {at} (the host's clock), if no players are on."}
 
 
+S_TRIED = "Tried in tonight's window, it waits: by itself the next night at {at} (the host's clock)."
+S_TRIED_UNREAD = ("Tonight's window could not read its scheduled tasks, so it left it alone: it tries again the next "
+                  "night at {at} (the host's clock).")
+S_CRON_UNREAD = ("Its scheduled tasks are not read yet: the window reads them first and leaves it to a task that "
+                 "updates it.")
+
+
 def when(gs, auto, cfg):
     """(when, link) of a game update: the queue a person asked for, its own scheduled update task, or the window.
 
-    The queue first: Update when empty runs it as soon as nobody is on, before any task or window would.
+    The queue first: Update when empty runs it as soon as nobody is on, before any task or window would. The task
+    is the one its crontab last showed (its Scheduled tasks card's read, or the window's own: updates.read_lgsm_cron);
+    a crontab not read is never taken as one without the task, and opening the page reads none.
     """
     if gs.update_pending:
         return U.tr("Queued: it updates as soon as no players are on."), None
-    cron = (U.lgsm_cron_seen(gs.id) or {}).get("game")
-    if cron:
-        return U.tr("By itself: its scheduled task runs update ({schedule}, the host's clock).", schedule=cron), None
+    seen = U.lgsm_cron_seen(gs.id)
+    if (seen or {}).get("game"):
+        return U.tr("By itself: its scheduled task runs update ({schedule}, the host's clock).",
+                    schedule=seen["game"]), None
     if not auto:
         return U.tr("Automatic updates are off for it: it waits for Update now."), None
     if UA.tried_now("game:%d" % gs.id, gs.remote, cfg):
-        return U.tr("Tried in tonight's window, it waits: by itself the next night at {at} (the host's clock).",
-                    at=cfg["start"]), None
-    return U.tr(WHEN_WINDOW[U.window_phase(gs.remote, cfg)], at=cfg["start"], end=cfg["end"]), None
+        return U.tr(S_TRIED_UNREAD if seen is None else S_TRIED, at=cfg["start"]), None
+    said = U.tr(WHEN_WINDOW[U.window_phase(gs.remote, cfg)], at=cfg["start"], end=cfg["end"])
+    return (said if seen is not None else "%s %s" % (said, U.tr(S_CRON_UNREAD))), None
 
 
 S_CONFIRM_TITLE = "Update {name} now?"
