@@ -37,7 +37,7 @@ from panel.services import updates as U, updates_auto as UA, websites_access as 
 
 HISTORY_ACTIONS = ("panel_self_update", "os_update_run", "remote_os_update", "update-lgsm_server", "update_server",
                    "force-update_server", "update_complete", "update_when_empty", "update_warned", "addon_update",
-                   "website_update", "update_skipped")
+                   "website_update", "update_skipped", "update_left_stopped")
 HISTORY_MAX = 40
 _LGSM = "update-lgsm"
 S_NOTHING_SAFE = "Nothing to update that is safe to run now."

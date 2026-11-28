@@ -339,6 +339,36 @@ def _window_run324(gs, answers):
     return ran, rows, sent
 
 
+def _s5_left_stopped(host, su):
+    gs = _gs324(host, "p324-gmod2", "gmod", "p324gmod2", 27125)
+    _u324.set_backup_first(gs.id, True)
+    _p9_patch(_ua324, "_site_ids", lambda: [])
+    _p9_patch(_ua324, "_server_ids", lambda: [gs.id])
+    _p9_patch(_ua324, "_pending_addons", lambda g, cfg: [])
+    _p9_patch(_gu324, "check_pass", lambda now=None: None)
+    _p9_patch(_sh324, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_mon324, "_cached_player_count", lambda sid: 0)
+    _p9_patch(_sh324, "get_server_status", lambda remote, g, distinguish_unresponsive=False: "online")
+    refused = "That server is already running. Use 'restart' if you want it bounced."
+    ran, rows, sent = _window_run324(gs, {"start": (False, refused)})
+    hist = [h for h in _p9_json(_client324(su.id).get("/api/updates")).get("history") or []
+            if h.get("action") == "update_left_stopped" and h.get("target") == gs.name]
+    eq("nightly window, Back up first (updates_auto.tick -> update_game): a start refused after the update leaves a "
+       "History row saying the server was left stopped and why, marked failed, and the alert says so too",
+       (ran, [(a, "left stopped: " + refused in dt, ok) for a, dt, ok in rows],
+        [h.get("badge") for h in hist][:1], ["left stopped" in s for s in sent]),
+       (["stop", "backup", "update", "start"], [("update_left_stopped", True, False)], ["failed"], [True]))
+    ran, rows, sent = _window_run324(gs, {"update": (False, "SteamCMD failed"), "start": (False, refused)})
+    eq("nightly window: an update that fails and a start again that is refused: the History row and one alert with "
+       "both reasons", (ran, len(rows), len(sent), "SteamCMD failed" in "".join(sent), "left stopped" in "".join(sent)),
+       (["stop", "backup", "update", "start"], 1, 1, True, True))
+    ran, rows, sent = _window_run324(gs, {})
+    eq("nightly window (control: the server starts again): no left-stopped row, no alert", (ran[-1:], rows, sent),
+       (["start"], [], []))
+    _u324.set_backup_first(gs.id, False)
+    _restore_one324(_sd324, "_run_action")
+
+
 # ── 6. The Updates page ────────────────────────────────────────────────────────────────────────────
 def _rows324(su):
     body = _p9_json(_client324(su.id).get("/api/updates"))
@@ -532,6 +562,7 @@ _HOST324 = (
     _s2_site,
     _s3_lifted,
     _s4_own_port,
+    _s5_left_stopped,
 )
 _GAME324 = (
 )

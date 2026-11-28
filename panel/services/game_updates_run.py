@@ -171,7 +171,13 @@ def update_game(app, gs, who, backup):
     """The nightly window's update of `gs`'s game, backed up first when `backup`. -> whether it updated.
 
     A step that fails stops the run; a server it stopped is started again. The history has each step's rows
-    (_run_action's own); a failure also sends the auto_update_failed alert.
+    (_run_action's own); a failure also sends the auto_update_failed alert. A server the run stopped and could not
+    start again has a History row of its own saying it was left stopped, and why (_left_stopped): the steps' rows
+    alone read as a backup and an update that went well.
+
+    Each start is _run_action's start, the dashboard's and the bulk Start's path (its no-op refusal, its holds, its
+    audit row); the page's port check is left out, as for every caller with no person to answer its "Start anyway":
+    the server ran on that port until this run stopped it.
     """
     from panel.routes._shared import get_server_status
     why = _account_refusal(gs)
@@ -183,14 +189,32 @@ def update_game(app, gs, who, backup):
         ok, said = _run_wait(app, gs, action, who)
         if ok:
             continue
-        if online and action in ("backup", "update"):
-            _run_wait(app, gs, "start", who)       # it was running before the run stopped it
+        stopped = ""
+        if action == "start":
+            stopped = _left_stopped(gs, who, said)
+        elif online and action in ("backup", "update"):
+            stopped = _start_again(app, gs, who)    # it was running before the run stopped it
         if ok is None:
             _skipped(gs, "LinuxGSM postponed its %s: %s" % (action, said), who)
-        else:
-            _alert(gs.name, action, said)
+        if ok is False or stopped:
+            _alert(gs.name, action, said if ok is False else "LinuxGSM postponed it", stopped)
         return False
     return True
+
+
+def _start_again(app, gs, who):
+    """Start `gs` again after a failed step of a run that stopped it. -> "" once it started, else why it did not."""
+    ok, said = _run_wait(app, gs, "start", who)
+    return "" if ok else _left_stopped(gs, who, said)
+
+
+def _left_stopped(gs, who, said):
+    """The History row of a server the window stopped and could not start again. -> its reason."""
+    from panel.security.auth import log_action
+    why = (str(said or "").strip() or "its start did not answer")[:250]
+    log_action(None, "update_left_stopped", target=gs.name, actor=who, server=gs, success=False,
+               detail="%s: left stopped: %s" % (who, why))
+    return why
 
 
 def _skipped(gs, why, who):
@@ -199,12 +223,13 @@ def _skipped(gs, why, who):
                detail="%s: game not updated, %s; the next window tries again" % (who, why))
 
 
-def _alert(name, action, said):
+def _alert(name, action, said, stopped=""):
     from panel.services import notifications
+    left = " It was left stopped: %s." % stopped[:200] if stopped else ""
     try:
         notifications.notify(
             "auto_update_failed", "Automatic update failed: %s" % name,
-            "The automatic game update of %s failed at its %s: %s. See Updates in the panel."
-            % (name, action, said[:200]))
+            "The automatic game update of %s failed at its %s: %s.%s See Updates in the panel."
+            % (name, action, said[:200], left))
     except Exception:  # noqa: BLE001 - an alert channel that failed never stops the window
         _log.debug("auto_update_failed alert not sent", exc_info=True)
