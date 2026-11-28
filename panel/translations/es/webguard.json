@@ -28,6 +28,7 @@
   "Saved: every domain of this site gets its certificate automatically from Let's Encrypt again.": "Guardado: todos los dominios de este sitio vuelven a obtener su certificado automáticamente de Let's Encrypt.",
   "Saved: the site's certificate is used for {names}.": "Guardado: el certificado del sitio se usa para {names}.",
   "Scanner requests": "Peticiones de escáneres",
+  "Shorter than OWASP's example of a 10-minute lockout. It is still saved.": "Más corto que el ejemplo de OWASP de un bloqueo de 10 minutos. Se guarda igualmente.",
   "Sign-in attempts": "Intentos de inicio de sesión",
   "That address is not blocked on this website.": "Esa dirección no está bloqueada en este sitio web.",
   "The certificate covers none of this site's domains, so nothing was saved. {why}": "El certificado no cubre ninguno de los dominios de este sitio, así que no se guardó nada. {why}",

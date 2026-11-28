@@ -3849,6 +3849,27 @@ def _web_f2b_reload(restart=()):
     return "yes" if rc == 0 else "no"
 
 
+def web_guard_actions(text):
+    """{jail: its action lines} of a jail file's text (web_guard_jails'), for the websites' jails it holds."""
+    out, jail = {}, None
+    for line in (text or "").splitlines():
+        m = re.fullmatch(r"\[([a-z0-9-]{1,40})\]", line.strip())
+        if m:
+            jail = m.group(1) if m.group(1) in WEB_GUARD_JAILS else None
+        elif jail and (line.startswith("action = ") or (line.startswith(" ") and jail in out)):
+            out.setdefault(jail, []).append(line.strip())
+    return out
+
+
+def web_guard_changed_actions(old, new, action_changed=False):
+    """The jails in both jail file texts `old` and `new` whose actions differ: those a reload would leave as they were.
+
+    `action_changed`: the action's own file changed (a helper update), which every running jail keeps as well.
+    """
+    before, after = web_guard_actions(old), web_guard_actions(new)
+    return sorted(j for j in after if j in before and (action_changed or before[j] != after[j]))
+
+
 def _web_guard_apply(guard, pw):
     """Write (or, switched off, remove) the websites' jails, then reload fail2ban. Prints guard=on|off fail2ban=."""
     if not guard["enabled"]:
@@ -3993,6 +4014,34 @@ def do_website_guard_ban(args, content):
     _web_guard_event("ban", ip, jail, host)
     sys.stdout.write("ban=yes\n")
     return 0
+
+
+def _web_deny_write(ip, data, gid):
+    """Write one deny list entry atomically, root's and readable by the proxy's group `gid` (0640).
+
+    The proxy's `file` matcher runs as the proxy's user and matches only an entry it can read: an entry it cannot
+    read (0600 root) let a banned visitor through, cached pages and all. Nobody else reads it (the folder is 0710).
+    """
+    _web_write(os.path.join(WEB_DENY_DIR, ip), data, WEB_FILE_PROXY, 0, gid)
+
+
+def web_guard_entry_text(jail, at, until, host):
+    """One deny list entry's text (web_guard_entry reads it back)."""
+    return "jail=%s at=%d until=%d host=%s\n" % (jail, at, until, host)
+
+
+def _web_deny_modes(gid):
+    """Entries written before they were the proxy's to read (0600 root) written again 0640 root:`gid`, as a ban writes them.
+
+    Run by each apply: a ban made by an older helper, or restored by fail2ban before the update, then blocks too.
+    """
+    for ip, e in _web_deny_entries().items():
+        try:
+            st = os.lstat(os.path.join(WEB_DENY_DIR, ip))
+        except OSError:
+            continue    # gone already (an unban): nothing to set
+        if st.st_gid != gid or stat.S_IMODE(st.st_mode) != WEB_FILE_PROXY:
+            _web_deny_write(ip, web_guard_entry_text(e["jail"], e["at"], e["until"], e["host"]).encode(), gid)
 
 
 def web_guard_entry(text):

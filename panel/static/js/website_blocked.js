@@ -10,6 +10,7 @@
   var ID = WS.siteId;
   function row(e) {
     var li = WS.node('li', 'ws-row');
+    li.setAttribute('data-ip', String(e.ip || ''));
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     top.appendChild(WS.raw('span', 'font-monospace text-break', String(e.ip || '')));
     top.appendChild(WS.raw('span', 'text-secondary', String(e.reason || '')));
@@ -60,7 +61,7 @@
   window.wsUnblock = function (ip) {
     WS.say('wv-msg', WS.T('Working…'));
     WS.post(WS.R.act(ID, 'blocked/unban'), {ip: String(ip)}).then(function (d) {
-      if (WS.done(d, 'wv-msg')) WS.loadBlocked();
+      if (WS.done(d, 'wv-msg')) dropRow(String(ip));
     });
   };
   // Opened straight on the Rules tab (?tab=rules): website_site.js picked the tab before this file was loaded.

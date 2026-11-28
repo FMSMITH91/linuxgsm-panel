@@ -297,6 +297,20 @@ def _unblock_run322(st, f2b):
         _shutil322.rmtree(d, ignore_errors=True)
 
 
+def _s4_unblock(st):
+    got = _unblock_run322(st, _F2b322())
+    eq("blocked visitors (GET /websites/<id>/blocked, the helper's real list): this site's attacker is listed, and the "
+       "host's other blocked address (another site's) is counted, never named", got["before"], ([_VISITOR322], 1))
+    eq("blocked visitors (POST /websites/<id>/blocked/unban down to the helper, fail2ban's unbanip running the "
+       "action's unban): it says it worked, the address is gone from the next list, the audit row is the Unblock's "
+       "one, marked done (no second row saying its ban ended), and a second Unblock is idempotent",
+       (got["status"], got["ok"], got["after"][0], [(("unblocked by hand" in a), ok) for a, ok in got["audit"]],
+        got["again"]), (200, True, [], [(True, True)], (0, "released=yes\n")))
+    still = _unblock_run322(st, _F2b322(lifts=False))
+    eq("blocked visitors (Unblock, control: fail2ban keeps banning the address): refused, audited as not done",
+       (still["ok"], [ok for _a, ok in still["audit"]]), (False, [False]))
+
+
 # ── 5. A change of the jails' actions restarts those jails ─────────────────────────────────────────
 # ── 7. An apply refusal in plain words ─────────────────────────────────────────────────────────────
 _CADDY_RAW322 = ('Error: loading initial config: loading new config: setting up custom log \'lgsmsec3_0\': opening log '
@@ -383,6 +397,32 @@ def _node322(page, scripts, scenario, routes):
             return {"error": (r.stdout + r.stderr)[-1200:]}
     finally:
         _shutil322.rmtree(tmp, ignore_errors=True)
+
+
+def _s8_blocked_page():
+    from unit.part301 import _site_ad301
+    entry = {"ip": _VISITOR322, "jail": "lgsm-web-login", "reason": "Too many sign-in attempts",
+             "since": "2026-11-27 10:00:00 UTC", "until": "2026-11-27 10:10:00 UTC"}
+    routes = {"/websites/7/blocked": {"success": True, "entries": [entry], "count": 1, "others": 2,
+                                      "guard": {"enabled": True, "fail2ban": "yes"}},
+              "/websites/7/blocked/unban": {"success": True, "message": "%s is no longer blocked." % _VISITOR322}}
+    got = _node322(_site_ad301, ["websites_common.js", "website_site.js", "website_blocked.js"], r"""
+  WS.loadBlocked();
+  for (let i = 0; i < 4; i++) await tick();
+  const row = $('wv-list').children[0];
+  const shown = {text: row ? row.textContent : '', state: $('wv-state').textContent, n: $('wv-count').textContent};
+  window.wsUnblock('198.51.100.77');
+  for (let i = 0; i < 4; i++) await tick();
+  return {shown: shown, left: $('wv-list').children.length, n: $('wv-count').textContent, msg: $('wv-msg').textContent};
+""", routes)
+    shown = got.get("shown") or {}
+    eq("Blocked visitors (js/website_blocked.js): each address says since when as well as until when",
+       ("since" in shown.get("text", "") and "2026-11-27 10:00:00 UTC" in shown.get("text", ""), got.get("error")),
+       (True, None))
+    eq("Blocked visitors (js/website_blocked.js): the host's other bans (they hold for this site too) are counted under "
+       "the list, never named", "2 more address(es)" in shown.get("state", ""), True)
+    eq("Blocked visitors (js/website_blocked.js, Unblock): the row is gone at once, the count follows, the answer kept",
+       (got.get("left"), got.get("n"), got.get("msg")), (0, "0", "%s is no longer blocked." % _VISITOR322))
 
 
 # ── 9. The Updates page ──────────────────────────────────────────────────────────────────────────
@@ -500,7 +540,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir, _s3_deny_modes):
+for _sec322 in (_s1_log_dir, _s3_deny_modes, _s8_blocked_page):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():
@@ -508,7 +548,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped,):
+        for _sec322 in (_s2_mapped, _s4_unblock):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:
