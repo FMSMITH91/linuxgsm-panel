@@ -1,0 +1,13 @@
+{
+  "name": "lighthouse-ci-runner",
+  "private": true,
+  "description": "Lighthouse CI for .github/workflows/lighthouse.yml, installed with npm ci from the lockfile beside it",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@lhci/cli": "0.16.1",
+    "puppeteer-core": "25.19.0"
+  }
+}

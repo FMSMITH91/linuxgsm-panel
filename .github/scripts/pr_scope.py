@@ -89,7 +89,7 @@ _OTHER_LOCKS = (".github/ci-requirements/**", ".github/ci-requirements-checks/**
                 "tools/gamedig/package.json", "tools/gamedig/package-lock.json",
                 "tools/gamedig/osv-scanner.toml", "panel/static/vendor/package.json",
                 "panel/static/vendor/package-lock.json", "panel/install/requirements*.in",
-                "panel/install/osv-scanner.toml")
+                "panel/install/osv-scanner.toml", ".github/lhci/**")
 # What the browser jobs never load: the test suites, the other tools, the CI's own scripts, and
 # the installer-side shell scripts and lists (the panel they drive is served from the checkout).
 _NOT_IN_A_BROWSER = ("tests/**", "tools/**", ".github/scripts/**", "install.sh", "panel/install/*.sh",
@@ -107,7 +107,7 @@ JOB_IRRELEVANT = {
 _JOB_KEEP = {
     "coverage": (".github/ci-requirements/coverage.in", ".github/ci-requirements/coverage.txt"),
     "js coverage": ("tools/js_coverage/**", "tools/nosudo_runner.py"),  # run.py starts serve.py under it
-    "lighthouse": ("tools/lhci_serve.py", "tools/lhci-login.js", ".github/lighthouserc.json"),
+    "lighthouse": ("tools/lhci_serve.py", "tools/lhci-login.js", ".github/lighthouserc.json", ".github/lhci/**"),
 }
 
 

@@ -40,6 +40,9 @@ _CASES169 = [
     ("tools/lhci_serve.py", False, True, False),
     ("tools/lhci-login.js", False, True, False),
     (".github/lighthouserc.json", True, True, False),            # Lighthouse's own config
+    (".github/lhci/package-lock.json", True, True, False),        # the Lighthouse CI it installs
+    (".github/lhci/package.json", True, True, False),
+    (".github/lhci/.npmrc", True, True, False),
     ("install.sh", False, True, True),
     ("panel/install/recover.sh", False, True, True),
     ("panel/static/js/panel.js", False, False, False),

@@ -7524,7 +7524,8 @@ check("workflows: every tool pin file is a pip-compile lockfile beside its .in, 
 # query types are written for 5). Dependency Review must see the change, or a bump that adds a
 # vulnerable package slides past it: it is path-filtered.
 _ci_dep_blocks = re.split(r"\n(?=  - package-ecosystem: )", _ci_dep)
-_ci_npm = [_b for _b in _ci_dep_blocks if '- package-ecosystem: "npm"' in _b]
+# gamedig's entry alone: .github/lhci (the Lighthouse job's tree) has an npm entry of its own (part327).
+_ci_npm = [_b for _b in _ci_dep_blocks if _b.lstrip().startswith('- package-ecosystem: "npm"\n    directory: "/tools/gamedig"\n')]
 
 
 def _ci_on_block(w):
