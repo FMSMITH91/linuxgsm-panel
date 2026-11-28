@@ -35,10 +35,11 @@ from panel.core.panel_state import r36j_route_job as _job323
 from panel.db.models import (AuditLog as _Audit323, GameServer as _GS323, RemoteServer as _Remote323,
                              User as _User323, db as _db323)
 from panel.routes import _shared as _sh323, server_detail as _sd323, updates_game as _ug323
+from panel.security import auth as _auth323
 from panel.services import (game_updates as _gu323, game_updates_run as _gur323, lgsm_players as _lgp323,
                             monitoring as _mon323, notifications as _nt323, updates as _u323, updates_auto as _ua323)
 
-_ROWS323 = {"servers": [], "users": [], "remotes": []}
+_ROWS323 = {"servers": [], "users": [], "remotes": [], "groups": []}
 _IN323 = _cal323.timegm((2026, 11, 27, 4, 30, 0))
 _OUT323 = _cal323.timegm((2026, 11, 27, 12, 0, 0))
 _STEAM323 = ("[ .... ] Checking for update: SteamCMD\r[  OK  ] Checking for update: SteamCMD\n\n"
@@ -80,6 +81,21 @@ def _gs323(host, name, game, short, status="online"):
     _db323.session.commit()
     _ROWS323["servers"].append(gs.id)
     return gs
+
+
+def _member323(name, perms, gs):
+    """A user in a group of its own holding `perms` on server `gs`."""
+    import json
+    from panel.db.models import Group
+    u = _User323(username=name, password_hash=os.urandom(8).hex(), is_superadmin=False, is_active=True)
+    grp = Group(name=name + "-g", permissions=json.dumps(perms))
+    grp.game_servers = [gs]
+    u.groups = [grp]
+    _db323.session.add_all([u, grp])
+    _db323.session.commit()
+    _ROWS323["users"].append(u.id)
+    _ROWS323["groups"].append(grp.id)
+    return u
 
 
 def _settings323(**kw):
@@ -175,8 +191,12 @@ def _s2_rows(host, su, nobody, gmod):
        (True, _gu323.WHY_STEAM, "By itself tonight at 04:00 (the host's clock), if no players are on.",
         "Players are kicked: the server restarts (about 1 min, as its last update took).", False, _gu323.WHY_MINECRAFT,
         "Automatic updates are off for it: it waits for Update now.", _ug323.COST_STOPPED, "1.21.4 to 1.21.5."))
-    eq("game rows: a viewer who may not update the server sees no game row (its API is not theirs)",
-       [k for k in _rows323(nobody.id)[0] if k.startswith("game:")], [])
+    addons, upd = _member323("p323-addons", [_auth323.MANAGE_ADDONS], gmod), _member323("p323-upd", [_auth323.UPDATE_SERVER], gmod)
+    a_rows, a_body = _rows323(addons.id)
+    eq("game rows: a viewer who opens the page for the server's add-ons but may not run its Update sees no game row; "
+       "one who may update it does (control)",
+       (a_body.get("success"), [k for k in a_rows if k.startswith("game:")],
+        "game:%d" % gmod.id in _rows323(upd.id)[0]), (True, [], True))
     _u323.note_lgsm_cron(gmod.id, [{"command": "cd /home/p323gmod && ./gmodserver update-lgsm", "schedule": "0 5 * * 0"}])
     only_lgsm = (_rows323(su.id)[0].get("game:%d" % gmod.id) or {}).get("when")
     _u323.note_lgsm_cron(gmod.id, [{"command": "/home/p323gmod/gmodserver update > /dev/null 2>&1",
@@ -289,6 +309,7 @@ def _s5_window(host, su, gmod, mc):
     skip = _Audit323.query.filter_by(game_server_id=gmod.id, action="update_skipped").order_by(_Audit323.id.desc()).first()
     eq("nightly window: a game server with players on waits for the next night, and the history says why",
        (ran, "it has players on" in (skip.detail if skip else "")), ([], True))
+    del ran[:]
     _p9_patch(_mon323, "_cached_player_count", lambda sid: 0)
     _u323.note_lgsm_cron(gmod.id, [{"command": "./gmodserver update", "schedule": "15 5 * * *"}])
     _tick323(_IN323)
@@ -392,7 +413,8 @@ def _cleanup323():
     _db323.session.rollback()
     _db323.session.query(_Audit323).filter(_Audit323.game_server_id.in_(_ROWS323["servers"] or [0])).delete(
         synchronize_session=False)
-    for model, ids in ((_GS323, _ROWS323["servers"]), (_User323, _ROWS323["users"]),
+    from panel.db.models import Group as _Grp323
+    for model, ids in ((_GS323, _ROWS323["servers"]), (_Grp323, _ROWS323["groups"]), (_User323, _ROWS323["users"]),
                        (_Remote323, _ROWS323["remotes"])):
         for i in ids:
             row = _db323.session.get(model, i)
