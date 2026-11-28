@@ -996,6 +996,35 @@ def app_undo_step(remote, site, step):
     return (True, OK_STEP) if ok else (False, FAILED)
 
 
+def _wp_cli(remote, site, step, values, db_port):
+    """(ok, out) of a wp-cli step (services.website_app_admin) in the site's network, its values on stdin only."""
+    from panel.services import websites_recipes as _wr
+    values = dict(values, _db_port=db_port)
+    if not _container_values(remote, site, {"database": True}, values):
+        return False, ""
+    body, stdin = _wr.step_sh(site.account, site, step, values)
+    return _as_site(remote, site.account, body, timeout=600, stdin_text=stdin)
+
+
+def wp_admins(remote, site, db_port=3306):
+    """A WordPress site's administrators: (True, [logins]) or (False, sentence)."""
+    from panel.services import website_app_admin as _wa
+    ok, out = _wp_cli(remote, site, _wa.list_step(), {}, db_port)
+    if "SITE_BUILD_FAILED" in (out or ""):
+        return False, _mark(out)
+    got = _wa.logins(out)
+    return (True, got) if ok and got else (False, _wa.S_NOT_SET_UP)
+
+
+def wp_admin_reset(remote, site, user, password, email="", db_port=3306):
+    """Give WordPress administrator `user` `password` (and `email` when not ""): (ok, sentence)."""
+    from panel.services import website_app_admin as _wa
+    _ok, out = _wp_cli(remote, site, _wa.reset_step(), _wa.reset_values(user, password, email), db_port)
+    if "SITE_BUILD_FAILED" in (out or ""):
+        return False, _mark(out)
+    return _wa.reset_answer(out)
+
+
 def new_token():
     """A fresh proxy token or object-cache password: 48 URL-safe characters from the CSPRNG."""
     return _secrets.token_urlsafe(36)

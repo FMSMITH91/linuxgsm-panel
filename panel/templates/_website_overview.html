@@ -50,6 +50,7 @@
       </div>
     </div>
   </div>
+  {% if can_manage|default(false) and (site.kind == 'wordpress' or site.app_recipe) %}{% include "_website_app_admin.html" %}{% endif %}
   <details id="ws-logs-box" class="mt-2">
     <summary class="small" data-action="wsLoadLogs">Recent log lines</summary>
     <pre id="ws-logs" class="ws-log mt-1 mb-0"></pre>
