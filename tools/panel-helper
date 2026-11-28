@@ -3730,13 +3730,19 @@ WEB_GUARD_TAIL = 262144         # bytes of the security log read to name the sit
 # cannot be told at the moment fail2ban bans, so the record is kept here until it reads it.
 WEB_GUARD_EVENTS = WEB_PROXY_ETC + "/guard-events"
 WEB_GUARD_EVENTS_KEEP = 2000
-WEB_GUARD_ACTION_TEXT = """# Written by linuxgsm-panel: a website ban kept inside the web proxy. The panel rewrites it.
+# The ban's end is fail2ban's own: its ticket's <time> plus its <bantime> (Ticket.getEndOfBanTime). A growing ban
+# (bantime.increment) is raised by fail2ban's observer AFTER actionban ran with the first ban time, and reaches the
+# action as actionprolong with the raised <bantime> (fail2ban 1.0.2/1.1.0 observer.banFound -> prolongBan ->
+# Actions._prolongBan). <restored> is 1 for a ban fail2ban put back from its database at a jail's start: its site is
+# the one recorded before, never read again from the log (website-guard-ban-at).
+WEB_GUARD_ACTION_TEXT ="""# Written by linuxgsm-panel: a website ban kept inside the web proxy. The panel rewrites it.
 [Definition]
 actionstart =
 actionstop = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>
 actionflush = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>
 actioncheck =
-actionban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-ban <ip> <name> <bantime>
+actionban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-ban-at <ip> <name> <time> <bantime> <restored>
+actionprolong = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-prolong <ip> <name> <time> <bantime>
 actionunban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-unban <ip> <name>
 
 [Init]
@@ -3964,6 +3970,13 @@ def v_guard_bantime(s):
     return str(int(float(s)))
 
 
+def v_guard_stamp(s):
+    """fail2ban's <time> of a ban (its ticket's epoch, whole or not), as whole seconds."""
+    if not re.fullmatch(r"[0-9]{1,12}(?:\.[0-9]{1,9})?", s):
+        raise ValueError("not a time")
+    return str(int(float(s)))
+
+
 def _web_never(ip):
     """Whether `ip` is in the never list (or the list cannot be read: then nothing is banned)."""
     try:
@@ -3975,11 +3988,15 @@ def _web_never(ip):
     return any(addr.version == n.version and addr in n for n in nets)
 
 
-def web_guard_host(lines, ip):
-    """The site name (Host) of the newest security log line from `ip` among `lines`, or "-"."""
-    needle = '"client_ip":"%s"' % ip
+def web_guard_host(lines, ip, tag):
+    """The site name (Host) of the newest security log line from `ip` among `lines` that the jail counted, or "-".
+
+    Counted: tagged `tag` (the jail's, WEB_GUARD_JAILS), as its filter matches. A refused request of a banned visitor
+    (untagged) on another site, or a line the other jail counts, never names the site of this ban.
+    """
+    needle, counted = '"client_ip":"%s"' % ip, '"lgsm":"%s"' % tag
     for line in reversed(lines):
-        if needle not in line:
+        if needle not in line or counted not in line:
             continue
         try:
             host = str(json.loads(line).get("request", {}).get("host") or "")
@@ -4032,20 +4049,76 @@ def _web_guard_event(kind, ip, jail, host="-"):
 
 
 def do_website_guard_ban(args, content):
-    """fail2ban's ban (lgsm-web-deny): the address becomes a deny list entry the proxy refuses. Prints ban=."""
+    """fail2ban's ban as an older action file names it (ip, jail, bantime): ends at now + bantime. Prints ban=.
+
+    The action file the helper writes now runs website-guard-ban-at; the next apply rewrites an older one (and
+    restarts the website jails for it, which puts every live ban back through the new verb).
+    """
     ip, jail, bantime = args
+    now = int(time.time())
+    return _web_guard_ban(ip, jail, now, now + int(bantime), web_guard_host(_web_log_tail(), ip, WEB_GUARD_JAILS[jail]))
+
+
+def do_website_guard_ban_at(args, content):
+    """fail2ban's ban (lgsm-web-deny's actionban): the address becomes a deny list entry the proxy refuses. Prints ban=.
+
+    args: ip, jail, fail2ban's <time> (the ban's start), <bantime>, <restored>. The entry ends where fail2ban's ban
+    does (time + bantime). A fresh ban's site is the one its newest counted line asked for; a ban fail2ban restored
+    from its database at a jail's start (restored 1) keeps the site recorded before (web_guard_recorded_host).
+    """
+    ip, jail, at, bantime, restored = args
+    if restored == "1":
+        host = web_guard_recorded_host(ip, _web_deny_entries().get(ip), _web_guard_events_read())
+    else:
+        host = web_guard_host(_web_log_tail(), ip, WEB_GUARD_JAILS[jail])
+    return _web_guard_ban(ip, jail, int(at), int(at) + int(bantime), host)
+
+
+def _web_guard_ban(ip, jail, at, until, host):
+    """Write `ip`'s deny entry and its "ban" event, unless it is never banned or the deny list is full."""
     if _web_never(ip):
         sys.stdout.write("ban=refused\n")
         return 1
     if len(os.listdir(WEB_DENY_DIR)) >= WEB_GUARD_MAX:
         sys.stdout.write("ban=full\n")
         return 1
-    now = int(time.time())
-    host = web_guard_host(_web_log_tail(), ip)
-    entry = web_guard_entry_text(jail, now, now + int(bantime), host)
-    _web_deny_write(ip, entry.encode(), pwd.getpwnam(WEB_PROXY_USER).pw_gid)
+    _web_deny_write(ip, web_guard_entry_text(jail, at, until, host).encode(), pwd.getpwnam(WEB_PROXY_USER).pw_gid)
     _web_guard_event("ban", ip, jail, host)
     sys.stdout.write("ban=yes\n")
+    return 0
+
+
+def web_guard_recorded_host(ip, entry, events):
+    """The site recorded for `ip` before: its deny entry's, else the newest event naming it with a site, else "-".
+
+    A restored ban has no fresh line of its own; the log's newest line of that address may be another site's.
+    """
+    if entry is not None and entry["host"] != "-":
+        return entry["host"]
+    return next((e[5] for e in reversed(events) if e[3] == ip and e[5] != "-"), "-")
+
+
+def _web_guard_events_read():
+    try:
+        with open(WEB_GUARD_EVENTS, encoding="ascii", errors="replace") as fh:
+            return web_guard_events_after(fh.read().splitlines(), 0)
+    except OSError:
+        return []
+
+
+def do_website_guard_prolong(args, content):
+    """fail2ban's actionprolong: a growing ban was raised after it began; its entry now ends at time + bantime.
+
+    args: ip, jail, <time>, <bantime>. Prints prolong=yes, or prolong=none when the address has no entry of that jail.
+    """
+    ip, jail, at, bantime = args
+    entry = _web_deny_entries().get(ip)
+    if entry is None or entry["jail"] != jail:
+        sys.stdout.write("prolong=none\n")
+        return 0
+    text = web_guard_entry_text(jail, entry["at"], int(at) + int(bantime), entry["host"])
+    _web_deny_write(ip, text.encode(), pwd.getpwnam(WEB_PROXY_USER).pw_gid)
+    sys.stdout.write("prolong=yes\n")
     return 0
 
 
@@ -4799,6 +4872,9 @@ VERBS = {
     # Blocked visitors: ban, unban and flush are fail2ban's own (the lgsm-web-deny action runs them as root); list and
     # release are the panel's (the Blocked visitors list and its Unban).
     "website-guard-ban": ([v_guard_ip, v_guard_jail, v_guard_bantime], lambda a: [], None),
+    "website-guard-ban-at": ([v_guard_ip, v_guard_jail, v_guard_stamp, v_guard_bantime, v_choice("0", "1")],
+                             lambda a: [], None),
+    "website-guard-prolong": ([v_guard_ip, v_guard_jail, v_guard_stamp, v_guard_bantime], lambda a: [], None),
     "website-guard-unban": ([v_guard_ip, v_guard_jail], lambda a: [], None),
     "website-guard-flush": ([v_guard_jail], lambda a: [], None),
     "website-guard-list": ([v_guard_seq], lambda a: [], None),
@@ -10911,6 +10987,8 @@ ACTIONS = {
     "website-cpu-limit": do_website_cpu_limit,
     "website-proxy-rebind": do_website_proxy_rebind,
     "website-guard-ban": do_website_guard_ban,
+    "website-guard-ban-at": do_website_guard_ban_at,
+    "website-guard-prolong": do_website_guard_prolong,
     "website-guard-unban": do_website_guard_unban,
     "website-guard-flush": do_website_guard_flush,
     "website-guard-list": do_website_guard_list,

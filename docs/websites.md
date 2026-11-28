@@ -236,8 +236,11 @@ the panel's login whitelist, so a CDN's own address is never blocked.
 
 Each website's **Rules** tab lists the addresses blocked while attacking it (why, since when and until
 when), with **Unblock**, and counts the host's other blocked addresses, which are kept off this website too
-(they attacked another one, so they are not named). Unblock lifts the address in fail2ban and in the web
-proxy, and its row leaves the list at once. Every ban, every ban's end and every Unblock is in the audit
+(they attacked another one, so they are not named). A ban is listed on the site its counted requests asked for
+(never the site of a refused request), and a ban fail2ban puts back after a restart keeps that site. Until when
+is fail2ban's own end: a growing ban is raised by fail2ban a moment after it starts, and the list follows it.
+Unblock asks first, then lifts the address in fail2ban and in the web proxy, and its row leaves the list at once;
+an address already lifted on the host (fail2ban's `unbanip`) answers that it was already unblocked. Every ban, every ban's end and every Unblock is in the audit
 log, each end in its own words: the ban ran its time, it was lifted on the host (fail2ban's `unbanip`), or
 the jail stopped or restarted (a restart blocks the addresses whose ban is still running again). A ban is
 recorded within 30 minutes even when nobody opens the list, with the time it happened. Switching the

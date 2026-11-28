@@ -1732,6 +1732,8 @@ _VERB_SAMPLES = {
                                     "docker.io/library/caddy@sha256:" + "d" * 64, "v0.17.0"],
     "website-cpu-limit": ["ws12", "1500"],
     "website-guard-ban": ["203.0.113.9", "lgsm-web-login", "600"],
+    "website-guard-ban-at": ["203.0.113.9", "lgsm-web-login", "1795840578.897", "240", "0"],
+    "website-guard-prolong": ["203.0.113.9", "lgsm-web-scan", "1795840578", "480"],
     "website-guard-unban": ["2001:db8::9", "lgsm-web-scan"],
     "website-guard-flush": ["lgsm-web-login"],
     "website-guard-list": ["0"],
