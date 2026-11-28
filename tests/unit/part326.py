@@ -259,6 +259,11 @@ def _site326(host, name):
     return s
 
 
+def _forget_cache326(cfg):
+    """Take the page cache option this section saved out of the panel's config again."""
+    cfg.pop("websites_cache_build", None)
+
+
 def _s3_cache_off(host, su):
     _site326(host, "p326site")
     row = _w326.proxy_row(host.id)
@@ -286,7 +291,7 @@ def _s3_cache_off(host, su):
         again_loaded = list(loaded)
         on = _client326(su.id).post("/websites/proxy/options", json={"options": {"cache_build": True}})
     finally:
-        _cfg326.update_config(lambda cfg: cfg.pop("websites_cache_build", None))
+        _cfg326.update_config(_forget_cache326)
     eq("web proxy options (POST /websites/proxy/options, page cache turned off): applied at once, the proxy loads its "
        "configuration without the cache and its admin socket",
        (off.status_code, _p9_json(off).get("message"), len(off_loaded),
@@ -314,6 +319,11 @@ def _cleanup326():
             if got is not None:
                 _db326.session.delete(got)
     _db326.session.commit()
+    _forget326()
+
+
+def _forget326():
+    """What the panel keeps outside the database for this part's servers: the window, the servers' reads."""
     _cfg326.update_config(lambda cfg: cfg.pop(_u326.CFG, None))
     for i in _ROWS326["servers"]:
         _u326.forget_server(i)

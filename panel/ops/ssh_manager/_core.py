@@ -3131,9 +3131,7 @@ def _hs_gup(f, _host, acc):
 
 def _hs_port(f, _host, acc):
     if len(f) >= 2 and f[1].isdecimal():
-        proto = f[2] if len(f) >= 3 and f[2] in ("tcp", "udp") else ""
-        rest = f[3:] if proto else f[2:]
-        acc["ports"].add_socket(int(f[1]), rest[0] if rest else "", proto)
+        acc["ports"].add_fields(int(f[1]), f[2:])
 
 
 def _hs_ports_read(f, _host, acc):

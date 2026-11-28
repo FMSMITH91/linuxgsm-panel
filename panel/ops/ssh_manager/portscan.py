@@ -46,6 +46,12 @@ class Listening(set):
         if proto in PROTOCOLS:
             self.socks.setdefault(port, set()).add((proto, owner))
 
+    def add_fields(self, port, fields):
+        """Add one socket from the words a read printed after its port: `[protocol] [owner]` (either may be missing)."""
+        proto = fields[0] if fields and fields[0] in PROTOCOLS else ""
+        rest = fields[1:] if proto else fields
+        self.add_socket(port, rest[0] if rest else "", proto)
+
     def __eq__(self, other):
         """Equal as port sets: who holds a port is detail a caller may read, never part of the set's value."""
         return set.__eq__(self, other)
@@ -175,9 +181,7 @@ def parse_scan(out):
             continue
         p = f[0].rsplit(":", 1)[1]
         if p.isdecimal():
-            proto = f[1] if len(f) > 1 and f[1] in PROTOCOLS else ""
-            rest = f[2:] if proto else f[1:]
-            ports.add_socket(int(p), rest[0] if rest else "", proto)
+            ports.add_fields(int(p), f[1:])
     return ports
 
 
