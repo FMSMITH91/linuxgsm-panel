@@ -981,3 +981,5 @@ a42ecf04 Websites and add-ons update by themselves at night.
 fd5712ad A stopped database server is caught before Create.
 b3a3fd80 WordPress Site Health sees the page cache.
 94240b97 Game updates are on the Updates page.
+df15f1a2 Each update on the Updates page says what it is and which version it moves to.
+265b7271 Site Health sees the page cache on sites made before it could.

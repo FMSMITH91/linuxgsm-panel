@@ -105,8 +105,9 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches. 5: WordPress's
 # egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
 # 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary. 7: WordPress's
-# loopback plugin reports the web proxy's own page cache state in Site Health (PAGE_CACHE_FILE).
-SITE_FILES_REV = "files-7"
+# loopback plugin reports the web proxy's own page cache state in Site Health (PAGE_CACHE_FILE). 8: with no such file
+# yet, Site Health says the panel has not reported it, instead of calling the page cache off.
+SITE_FILES_REV = "files-8"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -124,8 +125,10 @@ CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
 # egress, which has no proxy. WordPress's loopback plugin reads it (see EGRESS FOR WORDPRESS).
 EGRESS_HOSTS_FILE = RUN_DIR + "/egress-hosts"
 # Whether the web proxy caches this site's pages, as the configuration it is running says (page_cache_text): "on <ttl
-# seconds>" or "off". Written by the proxy's apply (ssh_manager.websites.proxy_apply), read by WordPress's loopback
-# plugin for Site Health's page cache test. No secret in it.
+# seconds>" or "off". Written by the proxy's apply (ssh_manager.websites.proxy_apply), after a WordPress site's
+# Performance save, and by the panel's pass at boot and every 30 minutes for a site this process has not written
+# it for (routes/websites.page_cache_note, page_cache_tick); read by WordPress's loopback plugin for Site
+# Health's page cache test. No secret in it.
 PAGE_CACHE_FILE = RUN_DIR + "/page-cache"
 # The hosts WordPress core's own update and Site Health requests reach (websites_catalog.EGRESS_HOSTS says which
 # request reaches which). Each redirect is a new CONNECT the proxy checks against the list on its own, so a redirect
@@ -1182,9 +1185,13 @@ function lgsm_panel_egress_args( $args, $url ) {
 }
 add_filter( 'http_request_args', 'lgsm_panel_egress_args', 10, 2 );
 
-/* The web proxy's page cache for this site, as the panel wrote it: array( on, ttl in seconds ). No file: off. */
+/* The web proxy's page cache for this site, as the panel wrote it: array( on, ttl in seconds ). On is null while there
+   is no file: the panel has not reported it yet, which says nothing about whether the cache is on. */
 function lgsm_panel_page_cache_state() {
-	$text = is_readable( LGSM_PANEL_PAGE_CACHE_FILE ) ? trim( (string) file_get_contents( LGSM_PANEL_PAGE_CACHE_FILE ) ) : '';
+	if ( ! is_readable( LGSM_PANEL_PAGE_CACHE_FILE ) ) {
+		return array( null, 0 );
+	}
+	$text = trim( (string) file_get_contents( LGSM_PANEL_PAGE_CACHE_FILE ) );
 	if ( 1 === preg_match( '/^on ([0-9]{1,6})$/', $text, $m ) ) {
 		return array( true, (int) $m[1] );
 	}
@@ -1196,6 +1203,18 @@ function lgsm_panel_page_cache_state() {
    through the web proxy that caches the pages: it could only ever say "not detected". */
 function lgsm_panel_page_cache_test() {
 	list( $on, $ttl ) = lgsm_panel_page_cache_state();
+	if ( null === $on ) {
+		return array(
+			'label'       => 'The panel has not reported the page cache yet',
+			'status'      => 'recommended',
+			'badge'       => array( 'label' => __( 'Performance' ), 'color' => 'blue' ),
+			'actions'     => '',
+			'test'        => 'page_cache',
+			'description' => '<p>' . esc_html( 'The panel writes whether the web proxy in front of this site caches '
+				. 'its pages within half an hour of starting, and whenever this site\'s Performance settings are saved. '
+				. 'Check again later.' ) . '</p>',
+		);
+	}
 	$result = array(
 		'label'       => $on ? __( 'Page cache is enabled' ) : __( 'Page cache is not enabled' ),
 		'status'      => $on ? 'good' : 'recommended',

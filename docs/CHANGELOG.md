@@ -39,6 +39,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 - **A website's Overview says what update is waiting.** It shows how many updates are ready and what they are,
   an Update now button (a few seconds offline), and the time it updates by itself tonight.
+- **Each update on the Updates page says what it is and which version it moves to.** Every row starts with
+  what it updates (a game by its own name, LinuxGSM, the panel, an add-on or a website) and shows the
+  installed and the available version; a new Paper build of the same Minecraft version says players are not
+  locked out. The note beside Update everything safe now wraps instead of being cut off.
 
 ### Fixed
 
@@ -50,6 +54,11 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 - **WordPress Site Health sees the page cache.** Site Health now reports the panel's real page cache instead
   of saying none was found, and cached pages no longer carry an empty Cache-Control header.
+- **Site Health sees the page cache on sites made before it could.** A WordPress site with the page cache on
+  could show "Page cache is not enabled" in Site Health until its proxy settings were applied again. The panel
+  now tells each WordPress site its page cache state shortly after it starts and when its Performance settings
+  are saved; until then Site Health says the state is not reported yet. WordPress sites are offered an Update
+  for that new Site Health text.
 
 ## [2026.11.27] — 2026-11-27
 

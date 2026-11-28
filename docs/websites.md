@@ -497,6 +497,14 @@ the site's own name to the site's own server inside its container, with the web 
 only the site's account can read (never a command line or a log). The request never leaves the container, so no
 outbound access is added. The panel writes the file again at the next install if it is changed or removed.
 
+The same plugin answers Site Health's **Page cache** test from the panel's word, because WordPress's own test
+looks for caching headers on requests that never pass the web proxy. The panel writes whether the proxy caches
+the site's pages, and for how long, into `/run/panel/page-cache` (read-only in the container, no secret in it):
+at every proxy apply, when the site's Performance settings are saved, and on a pass
+30 seconds after the panel starts and every 30 minutes for any WordPress site it has not written yet (a write
+that fails is tried again on the next pass). Until that file exists, Site Health says the panel has not reported
+the page cache yet, rather than calling it off.
+
 ## Backups and databases
 
 **Backups** holds the site's files and its databases, kept on the host as the site's own account (the

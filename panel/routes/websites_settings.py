@@ -228,6 +228,8 @@ def _perf_apply(site, changes, cache_turned):
         ok, said = _w.reconcile_proxy(site.remote)
     if ok and changes.get("page_cache") and not _w.page_cache_ready(site.remote):
         said = _page_cache_waits(site.remote)
+    if ok and site.kind == "wordpress":
+        _w.page_cache_note(site.remote, [site])       # Site Health's word, written even when nothing re-applied
     return ok, said
 
 
