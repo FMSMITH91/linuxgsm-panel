@@ -63,7 +63,7 @@ _CANARY = ("zz_complexity_gate_canary.py", "import os\n", ("pyflakes", "F401"))
 CODACY_DROPS = {("pydocstyle", "D203")}
 _ON_MAIN = " (Codacy reports this on main, not on the pull request)"
 # Codacy's own default ignores, quoted from docs.codacy.com/repositories-configure/ignoring-files/
-# ("Default ignored files"; .codacy.yaml's empty exclude_paths leaves them in force). Codacy never
+# ("Default ignored files"; .codacy.yaml's exclude_paths, one generated lockfile, leaves them in force). Codacy never
 # analyses a path matching one, so judging it here failed #393 on code nobody can change: the
 # minified socket.io-client bundle in panel/static/vendor/ (two functions over CCN 10).
 CODACY_DEFAULT_IGNORES = tuple(re.compile(p) for p in (

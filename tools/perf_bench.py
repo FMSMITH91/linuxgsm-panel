@@ -173,7 +173,7 @@ def build_app():
     The four settings below are what a Werkzeug test client needs to talk to it: no browser means
     no CSRF token, no session fingerprint and no https — the same reason the test suites disable
     CSRF for their test client. This file is a harness that happens to live in tools/, and Codacy
-    scans all of it (.codacy.yaml excludes nothing), so it says so at the line.
+    scans all of it (.codacy.yaml excludes only one generated lockfile), so it says so at the line.
     """
     a = appmod.create_app()
     a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep  # NOSONAR - benchmark harness, never served
