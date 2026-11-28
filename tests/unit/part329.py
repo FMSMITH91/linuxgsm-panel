@@ -7,6 +7,8 @@
 2. A viewer's own close of a fold is kept in their browser (js/fold_memory.js): restored on the next visit, forgotten
    when it matches the page's default, never recorded for a script's open, ignored when the address links into it,
    and the page draws its defaults when storage is refused.
+3. A setting that does not apply is shown greyed with the reason, never removed: a site without PHP keeps OPcache and
+   the object cache on its Performance tab, disabled, reading off, and never sent on Save.
 5. The Blocked visitors label says on or off and how many settings, so a closed one still says what is inside.
 
 HOW IT RUNS. part12's app and its database (tripwire armed): pages through their routes with the host's probe stood in;
@@ -25,7 +27,7 @@ from unit.part01 import _root, check, eq, skip
 from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_restore_all
 from unit.part47 import _cut47
 from unit.part221 import _node221
-from unit.part301 import _COMMON301, _node301
+from unit.part301 import _COMMON301, _node301, _page301
 from panel.core import config as _cfg329
 from panel.db.models import RemoteServer as _Remote329, Website as _Site329, db as _db329
 from panel.routes import websites as _w329
@@ -279,6 +281,59 @@ def _site329(st, name, kind, **kw):
     return s
 
 
+def _fieldset329(page):
+    m = _re329.search(r'<fieldset id="wperf-php"[^>]*>', page)
+    return m.group(0) if m else ""
+
+
+def _s3_perf_pages(st):
+    static = _site329(st, "p329-docs", "static")
+    php = _site329(st, "p329-blog", "php", php_version="8.4")
+    sp = _get329("/websites/%d" % static.id).get_data(as_text=True)
+    pp = _get329("/websites/%d" % php.id).get_data(as_text=True)
+    eq("greyed, not removed: a site without PHP keeps OPcache and the object cache on its Performance tab, in a "
+       "disabled fieldset with the reason",
+       ("disabled" in _fieldset329(sp), 'id="wperf-opcache"' in sp, 'id="wperf-obj"' in sp,
+        "Only for PHP sites: this website runs no PHP." in sp), (True, True, True, True))
+    eq("greyed, not removed: a PHP site's caches are live, with no reason line (control)",
+       (bool(_fieldset329(pp)), "disabled" in _fieldset329(pp), "Only for PHP sites" in pp), (True, False, False))
+
+
+_PERF329 = r"""
+  for (let i = 0; i < 4; i++) await tick();
+  window.wsTab('performance');
+  window.wsPerfSave();
+  for (let i = 0; i < 4; i++) await tick();
+  const post = calls.filter(function (c) { return c[0] === 'POST' && c[1].indexOf('/performance') >= 0; })[0];
+  return {op: $('wperf-opcache').checked, body: post ? post[2] : null};
+"""
+
+
+def _perf_answer329(kind):
+    perf = {"opcache": True, "opcache_memory_mb": 128, "opcache_revalidate_s": 2, "object_cache": False,
+            "page_cache": False, "page_cache_ttl": 300, "static_cache": True, "page_cache_ready": True, "page_cache_why": ""}
+    return {"success": True, "site": {"id": 7, "name": "docs", "kind": kind, "state": "running"}, "domains": [],
+            "perf": perf, "rules": []}
+
+
+def _s3_perf_save():
+    site = type("Site329", (), {"id": 7, "name": "docs", "kind": "static"})()
+    page = _page301("website.html", P9_ADMIN, site=site, can_manage=True, can_files=False, site_admin=True)
+    got = _node301(page, _COMMON301 + ["website_site.js", "website_tuning.js"], _PERF329,
+                   routes={"/api/websites/7": _perf_answer329("static")})
+    body = got.get("body") or {}
+    eq("greyed, not removed: on a site without PHP the greyed OPcache reads off and Save sends neither PHP cache",
+       (got.get("error"), got.get("op"), "opcache" in body, "object_cache" in body, "page_cache" in body),
+       (None, False, False, False, True))
+    site.kind = "php"
+    page = _page301("website.html", P9_ADMIN, site=site, can_manage=True, can_files=False, site_admin=True)
+    got = _node301(page, _COMMON301 + ["website_site.js", "website_tuning.js"], _PERF329,
+                   routes={"/api/websites/7": _perf_answer329("php")})
+    body = got.get("body") or {}
+    eq("greyed, not removed: a PHP site's Save sends OPcache and the object cache as set (control)",
+       (got.get("op"), body.get("opcache"), body.get("object_cache")), (True, True, False))
+
+
 # ── 4. the Overview's software line ──────────────────────────────────────────────────────────────────
 
 
@@ -346,8 +401,8 @@ with _p9.app_context():
         _db329.session.commit()
         _ROWS329["remotes"].append(_r329.id)
         _st329 = {"remote": _r329.id}
-        _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s5_guard_label)
-        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages,)]
+        _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s3_perf_save, _s5_guard_label)
+        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages)]
                                   + [(s, ()) for s in _plain329]):
             _err329 = _ran329(_sec329, *_args329)
             check("part329: %s ran to the end" % _sec329.__name__, not _err329, _err329)

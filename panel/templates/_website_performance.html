@@ -1,8 +1,12 @@
 {# Performance: OPcache and the object cache (PHP kinds), the page cache at the web proxy with Purge,
-   and long caching with compression for static files (js/website_tuning.js). #}
+   and long caching with compression for static files (js/website_tuning.js). A site without PHP still
+   shows the two PHP settings, greyed in a disabled fieldset with the reason, never removed: nothing a
+   person might look for is missing from the page, and a disabled field is not sent on Save. #}
 <section data-ws-pane="performance" hidden>
   <form id="wperf-form" data-action="wsPerfSave" data-args='["@event"]' data-on="submit">
-    {% if php_kind %}
+    <fieldset id="wperf-php"{% if not php_kind %} disabled aria-describedby="wperf-php-na"{% endif %}>
+    <legend class="visually-hidden">PHP caches</legend>
+    {% if not php_kind %}<div id="wperf-php-na" class="small text-secondary mb-1">Only for PHP sites: this website runs no PHP.</div>{% endif %}
     <div class="ws-opt">
       <div class="form-check form-switch mb-1">
         <input class="form-check-input" type="checkbox" role="switch" id="wperf-opcache">
@@ -25,7 +29,7 @@
       <div id="wperf-obj-who" class="form-text mt-0" hidden>Only an administrator of this website can turn it on or off.</div>
       <div id="wperf-obj-info" class="small mt-1" hidden></div>
     </div>
-    {% endif %}
+    </fieldset>
     <div class="ws-opt">
       <div class="form-check form-switch mb-1">
         <input class="form-check-input" type="checkbox" role="switch" id="wperf-page" data-action="wsPageCacheCheck" data-on="change">

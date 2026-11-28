@@ -411,6 +411,9 @@ Saving restarts the site's PHP gracefully.
 
 ## Performance
 
+A site without PHP (a plain site or a Node.js app) still shows OPcache and the object cache, greyed with the line
+"Only for PHP sites": they are never removed from the page, and never sent when you save.
+
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
   by default. Turning it on or off starts or removes the cache beside the running site; the site itself is

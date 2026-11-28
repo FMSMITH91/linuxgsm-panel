@@ -120,7 +120,8 @@
   function setPerf(p) {
     if (!p || !WS.el('wperf-page')) return;
     var map = {'wperf-opcache': p.opcache, 'wperf-obj': p.object_cache, 'wperf-page': p.page_cache, 'wperf-static': p.static_cache};
-    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id]; });
+    // A setting that does not apply (greyed: a site without PHP) reads off, never on behind the grey.
+    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id] && !!live(id); });
     var nums = {'wperf-op-mem': p.opcache_memory_mb, 'wperf-op-reval': p.opcache_revalidate_s, 'wperf-ttl': p.page_cache_ttl};
     Object.keys(nums).forEach(function (id) { var e = WS.el(id); if (e && nums[id] != null) e.value = String(nums[id]); });
     adminOnly(WS.el('wperf-obj'), 'wperf-obj-who');
@@ -160,8 +161,10 @@
       });
     });
   };
-  function checked(id) { var e = WS.el(id); return e ? e.checked : undefined; }
-  function num(id) { var e = WS.el(id); return e && e.value !== '' ? Number(e.value) : undefined; }
+  // A field in a disabled fieldset (the PHP caches of a site without PHP) is shown greyed and never sent.
+  function live(id) { var e = WS.el(id); return e && !(e.closest && e.closest('fieldset[disabled]')) ? e : null; }
+  function checked(id) { var e = live(id); return e ? e.checked : undefined; }
+  function num(id) { var e = live(id); return e && e.value !== '' ? Number(e.value) : undefined; }
   window.wsPerfSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var body = {opcache: checked('wperf-opcache'), opcache_memory_mb: num('wperf-op-mem'), opcache_revalidate_s: num('wperf-op-reval'),

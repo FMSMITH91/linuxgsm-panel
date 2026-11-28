@@ -1,4 +1,6 @@
 {
+  "PHP caches": "Caches PHP",
+  "Only for PHP sites: this website runs no PHP.": "Uniquement pour les sites PHP : ce site web n'exécute pas PHP.",
   "Blocked visitors: on, {n} settings": "Visiteurs bloqués : activé, {n} réglages",
   "Blocked visitors: off, {n} settings": "Visiteurs bloqués : désactivé, {n} réglages"
 }
