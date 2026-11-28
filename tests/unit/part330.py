@@ -22,7 +22,8 @@
    answer the new password, then it is stored; each failure puts the old password back where it was changed; a
    database no app uses gets the warning and its new password in the no-store answer; a Node.js app's variable.
 6. The install dialog (Add a website: Install an app, js/websites.js in node): a generated admin password is drawn
-   masked like every stored secret.
+   masked like every stored secret; a typed one survives a refused Create and Set up databases, held in the script
+   (its field emptied, never given it back) and sent by the next Create.
 
 HOW IT RUNS. The routes through part12's app (its tripwire armed, so nothing reaches a host), the host's shell
 answered here; the page's scripts in node over the rendered markup (part301's harness, with timers, listeners and
@@ -624,6 +625,21 @@ _SCN_MADE330 = _FILL330 + r"""
   return {masked: masked.indexOf(made) >= 0, dots: masked.indexOf('••••••••••••') >= 0, copies: copies,
           shown: shown.indexOf(made) >= 0, pressed: pressed, hides: hide.length, after: box.textContent.indexOf(made) >= 0};
 """ % _MADE330
+# Create refused for a missing database server, Set up databases, then Create again once it is ready.
+_SCN_KEPT330 = _FILL330 + r"""
+  $('ws-add-admin-pass').value = '%s';
+  window.wsAddSubmit({preventDefault: function () {}});
+  for (let i = 0; i < 6; i++) await tick();
+  const field = $('ws-add-admin-pass'), after = {value: field.value, hint: field.placeholder};
+  const b = $('ws-missing-fix').querySelector('button');
+  if (b) window.wsDbSetup(JSON.parse(b.getAttribute('data-args'))[0]);
+  for (let i = 0; i < 8; i++) await tick();
+  window.wsAddSubmit({preventDefault: function () {}});
+  for (let i = 0; i < 6; i++) await tick();
+  const sent = calls.filter(function (c) { return c[0] === 'POST' && c[1].indexOf('install-app') >= 0; })
+                    .map(function (c) { return c[2].admin_password; });
+  return {after: after, sent: sent, setup: !!b, text: document.body.textContent.indexOf('%s') >= 0};
+"""
 
 
 def _install_page330():
@@ -641,6 +657,24 @@ def _s6_install_made():
        "seconds (it was printed as plain text)",
        tuple(got.get(k) for k in ("masked", "dots", "copies", "shown", "pressed", "hides", "after")),
        (False, True, [_MADE330], True, "true", 1, False))
+
+
+def _s6_install_kept():
+    entry = {"key": "database", "text": "No database server yet.", "kinds": ["install"], "host_id": 4, "fix_url": ""}
+    routes = {"/api/websites": _LIST330, "/api/remote/4/databases/setup": {"success": True, "message": "Setting up."},
+              "/websites/install-app": {"success": False, "message": "No database server yet.", "missing": [entry]}}
+    page, scripts = _install_page330(), ["websites_common.js", "secret_field.js", "websites.js"]
+    got = _node330(page, scripts, _SCN_KEPT330 % (_TYPED330, _TYPED330), routes)
+    check("install dialog, a typed password (node): the harness ran", "error" not in got, got.get("error"))
+    eq("install dialog: a typed admin password survives a refused Create and Set up databases: Create again sends it "
+       "(it sent none, so the install made a password the person never chose); the field is emptied and never given it "
+       "back, its placeholder says the typed one is kept",
+       (got.get("setup"), got.get("sent"), got.get("after"), got.get("text")),
+       (True, [_TYPED330, _TYPED330], {"value": _NONE330, "hint": "The password you typed is kept. Type another to change it."},
+        False))
+    ctl = _node330(page, scripts, (_SCN_KEPT330 % (_NONE330, "-")).replace("$('ws-add-admin-pass').value = '';", ""), routes)
+    eq("install dialog (control): with none typed, both Creates send none (the panel makes one) and the field says "
+       "nothing is kept", (ctl.get("sent"), ctl.get("after")), ([_NONE330, _NONE330], {"value": _NONE330, "hint": _NONE330}))
 
 
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
@@ -673,7 +707,8 @@ def _ran330(step, *args):
 
 
 _ran330.last = ""
-for _sec330 in (_s1_step_text, _s2_page, _s3_site_pages, _s3_game_tab, _s3_manager, _s4_rewriter, _s6_install_made):
+for _sec330 in (_s1_step_text, _s2_page, _s3_site_pages, _s3_game_tab, _s3_manager, _s4_rewriter, _s6_install_made,
+                _s6_install_kept):
     check("part330: %s ran to the end" % _sec330.__name__, _ran330(_sec330), _ran330.last)
 _trips330 = len(_P9_TRIPPED)
 with _p9.app_context():

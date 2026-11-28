@@ -49,8 +49,9 @@ it again. The delete removes whatever part of it reached the host.
 
 Choose **Install an app**, pick the app, and enter its domain and the app's admin username and email.
 Leave the password empty and the panel makes a strong one, shown once when the install starts, as dots
-until you press Show (Copy copies it without showing it). A password you type needs at least 15 characters.
-The panel then:
+until you press Show (Copy copies it without showing it). A password you type needs at least 15 characters;
+if Create first asks you to set up databases, the password you typed is kept for the install (the field says
+so). The panel then:
 
 1. creates the site's account and container, and the app's database (a scoped user with a generated
    password, stored encrypted, the same way as the [Databases](permissions.md#the-databases-manager)
