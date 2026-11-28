@@ -96,7 +96,14 @@
     wrap.appendChild(lines(r.what));
     if ((r.notes || []).length) wrap.appendChild(notes(r.notes));
     wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));
-    wrap.appendChild(line('clock', r.when, r.auto === false && !r.security ? 'text-warning-emphasis' : ''));
+    var when = line('clock', r.when, r.auto === false && !r.security ? 'text-warning-emphasis' : '');
+    if (r.when_link && r.when_link.href) {
+      var wl = el('a', 'ms-1', r.when_link.title || '');
+      wl.href = r.when_link.href;
+      wl.setAttribute('data-no-i18n', '');
+      when.appendChild(wl);
+    }
+    wrap.appendChild(when);
     var ctl = el('div', 'd-flex flex-wrap gap-2 align-items-center mt-1');
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');

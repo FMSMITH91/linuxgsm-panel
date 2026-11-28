@@ -563,6 +563,33 @@ def _updates322(su):
     return {r["ref"]: r for g in body.get("groups") or [] for r in g["items"]}, body
 
 
+def _s9_lgsm(st):
+    from panel.routes import server_files as _sf
+    from panel.services import updates as _u
+    from panel.services import lgsm_releases as _lr
+    gs = _server322(st)
+    su = _Client322(st.su.id)
+    _u.note_lgsm(gs.id, {"release": "v26.4.0", "latest": "v26.6.0", "behind": True})
+    _p9_patch(_lr, "releases", lambda newest=None: [])
+    _p9_patch(_sf, "_read_refused", lambda gs, what: None)
+    _p9_patch(_sf, "game_account_write_refusal", lambda remote, user: None)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
+    seen = {"unread": (_updates322(su)[0].get("lgsm:%d" % gs.id) or {})}
+    for name, jobs in (("none", [{"raw": "*/5 * * * * x", "schedule": "*/5 * * * *", "command": "./p322cod monitor"}]),
+                       ("weekly", [{"raw": "x", "schedule": "30 5 * * 0", "command": "./p322cod update-lgsm"}])):
+        _p9_patch_sm("list_cron_jobs", lambda remote, user, selfname=None, jobs=jobs: [dict(j) for j in jobs])
+        su.get("/api/server/%d/cron" % gs.id)
+        seen[name] = _updates322(su)[0].get("lgsm:%d" % gs.id) or {}
+    _u.forget_server(gs.id)
+    eq("Updates (GET /api/updates, LinuxGSM's row after GET /api/server/<id>/cron read the account's crontab): no "
+       "update-lgsm task says updates are manual for it and links its Scheduled tasks; a task says when it runs; a "
+       "crontab not read yet claims neither (never a weekly job nobody checked)",
+       ({k: ("manual" in v.get("when", ""), "30 5 * * 0" in v.get("when", ""), "not read yet" in v.get("when", ""),
+             ((v.get("when_link") or {}).get("href") or "").endswith("/server/%d/files#schedule" % gs.id))
+         for k, v in seen.items()}),
+       {"unread": (False, False, True, True), "none": (True, False, False, True), "weekly": (False, True, False, False)})
+
+
 def _pending322(st, name, kind, image_same, files):
     from panel.routes import websites as _w
     s = _site322(st, name, kind)
@@ -671,7 +698,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain, _s8_guard_note, _s9_lgsm):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Panel | A new signed panel release (with its changes) | The panel restarts: a few seconds. Game servers and websites keep running. | Never: press **Update now**. |
 | Host system | Each host's OS packages, security ones counted apart | Services may restart; a kernel update needs a reboot | Security packages, where the host has automatic security updates on (the host's page says) |
-| Game servers | A server whose LinuxGSM is behind its latest release, with that release's notes | None: players stay on | LinuxGSM's own weekly job (Sundays 05:30, host time). The game itself is updated by LinuxGSM's daily job at 05:15. |
+| Game servers | A server whose LinuxGSM is behind its latest release, with that release's notes | None: players stay on | A scheduled task of the server's that runs `update-lgsm`, when its crontab has one (the row says when, as the server's Scheduled tasks card last read it); otherwise press **Update now**, or add the task on that card. |
 | Add-ons | An add-on whose image differs from the signed catalog's | The add-on restarts (about a minute); players stay on | The nightly window |
 | Websites | A site with a newer image or new server settings from the panel | A few seconds offline | The nightly window |
 

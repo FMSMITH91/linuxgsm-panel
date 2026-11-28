@@ -79,7 +79,8 @@ def _when_auto(auto, security, cfg):
 
 def _row(kind, ref, name, **kw):
     row = {"kind": kind, "ref": ref, "name": name, "host": "", "what": [], "notes": [], "cost": "", "security": False,
-           "safe": False, "auto": None, "auto_editable": False, "when": "", "action": None, "link": ""}
+           "safe": False, "auto": None, "auto_editable": False, "when": "", "when_link": None, "action": None,
+           "link": ""}
     row.update(kw)
     return row
 
@@ -119,6 +120,20 @@ def _servers(user):
     return [gs for gs in get_user_servers(user) if gs.installed]
 
 
+def _lgsm_when(gs):
+    """(when, link) of a server's LinuxGSM: the update-lgsm task of its crontab, as its Scheduled tasks card read it."""
+    seen = U.lgsm_cron_seen(gs.id)
+    tasks = {"href": url_for("server_files", server_id=gs.id) + "#schedule", "title": U.tr("Scheduled tasks")}
+    if seen is None:
+        return U.tr("Whether one of its scheduled tasks updates LinuxGSM is not read yet: its Scheduled tasks card "
+                    "says. Until then it waits for Update now."), tasks
+    if seen["schedule"]:
+        return U.tr("By itself: its scheduled task runs update-lgsm ({schedule}, the host's clock).",
+                    schedule=seen["schedule"]), None
+    return U.tr("Updates are manual for this server: Update now, or schedule update-lgsm on its Scheduled tasks "
+                "card."), tasks
+
+
 def _lgsm_rows(user, servers):
     if not _may_lgsm(user):
         return []
@@ -129,10 +144,10 @@ def _lgsm_rows(user, servers):
         if not info.get("behind"):
             continue
         notes = [{"title": r["tag"], "url": r["url"]} for r in _lgsm_update.notes_behind(info)][:6]
+        when, when_link = _lgsm_when(gs)
         rows.append(_row("lgsm", "lgsm:%d" % gs.id, gs.name, host=gs.remote.display_name if gs.remote else "",
                          what=[U.tr("LinuxGSM {old} to {new}.", old=info["release"], new=info["latest"])], notes=notes,
-                         cost=U.tr(U.COST_LGSM), safe=True,
-                         when=U.tr("By itself: LinuxGSM's own weekly job, Sundays at 05:30 (the host's clock)."),
+                         cost=U.tr(U.COST_LGSM), safe=True, when=when, when_link=when_link,
                          action={"post": url_for("api_server_action", server_id=gs.id), "body": {"action": _LGSM}},
                          link=url_for("server_detail", server_id=gs.id)))
     return rows

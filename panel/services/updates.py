@@ -53,6 +53,9 @@ COUNT_TTL = 60.0
 
 _ADDONS_SEEN = {}         # server id -> {"at": epoch, "rows": {addon id: {"reason", "version", "new"}}}
 _LGSM_SEEN = {}           # server id -> {"at": epoch, "release", "latest", "behind"}
+_LGSM_CRON = {}           # server id -> {"at": epoch, "schedule": the update-lgsm task's cron schedule, "" when none}
+# An update-lgsm in a crontab line's command: LinuxGSM's own command or its short form, after the server's script.
+_LGSM_CRON_RE = re.compile(r"(?:^|\s)(?:update-lgsm|ul)(?:\s|$)")
 _COUNTS = {}              # user id -> (epoch, count)
 _SEEN_LOCK = threading.Lock()
 
@@ -187,11 +190,31 @@ def note_lgsm(gs_id, info):
                              "latest": info.get("latest") or "", "behind": bool(info.get("behind"))}
 
 
+def note_lgsm_cron(gs_id, jobs):
+    """Remember whether a server's crontab runs update-lgsm, as its Scheduled tasks card last read it (`jobs`).
+
+    `jobs` is ssh_manager.list_cron_jobs' list; None (the crontab could not be read) keeps what was known.
+    """
+    if not isinstance(jobs, list):
+        return
+    found = [j for j in jobs if isinstance(j, dict) and _LGSM_CRON_RE.search(str(j.get("command") or ""))]
+    with _SEEN_LOCK:
+        _LGSM_CRON[gs_id] = {"at": time.time(), "schedule": str(found[0].get("schedule") or "")[:60] if found else ""}
+
+
+def lgsm_cron_seen(gs_id):
+    """{"at", "schedule"} of a server's update-lgsm task as last read, or None when its crontab was not read yet."""
+    with _SEEN_LOCK:
+        got = _LGSM_CRON.get(gs_id)
+        return dict(got) if got else None
+
+
 def forget_server(gs_id):
     """Drop what was read for a server (it was removed, or its id may be handed out again)."""
     with _SEEN_LOCK:
         _ADDONS_SEEN.pop(gs_id, None)
         _LGSM_SEEN.pop(gs_id, None)
+        _LGSM_CRON.pop(gs_id, None)
 
 
 def addons_seen(gs_id):
