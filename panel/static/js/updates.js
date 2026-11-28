@@ -18,10 +18,8 @@
   var ACTIONS = {panel_self_update: 'Panel', os_update_run: 'Host system', remote_os_update: 'Host system',
     'update-lgsm_server': 'LinuxGSM', update_server: 'Game update', 'force-update_server': 'Game update',
     update_complete: 'Game update', update_when_empty: 'Game update', update_warned: 'Game update',
-    update_left_stopped: 'Game update',
-    addon_update: 'Add-on', website_update: 'Website', update_skipped: 'Skipped'};
-  var polls = 0;
-  var last = null;
+    update_left_stopped: 'Game update', addon_update: 'Add-on', website_update: 'Website', update_skipped: 'Skipped'};
+  var polls = 0, last = null;
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
