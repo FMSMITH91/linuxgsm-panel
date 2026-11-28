@@ -11,6 +11,10 @@
 3. The page (templates/updates.html, js/updates.js, css/panel.css): the title comes first on the row, then the
    name, then the two version lines; a row with nothing else to say has no empty list; the header note wraps inside
    its group beside the buttons instead of being cut.
+4. WordPress's Site Health page cache state without a proxy apply: the update-check thread's pass (at boot, then
+   every 30 minutes) writes it into each WordPress site whose state this process has not written yet, as the site's
+   account, and tries a failed write again on the next pass; a Performance save writes it again even when the state
+   is unchanged; the loopback plugin says "not reported yet" for a missing file, not "off".
 
 HOW IT RUNS. part12's app and database; every host call is a stand-in, part12's tripwire is armed.
 """
@@ -225,6 +229,93 @@ def _s3_page():
        (True, True, True))
 
 
+# ── 4. Site Health's page cache state ───────────────────────────────────────────────────────────
+def _site328(host, name, **kw):
+    from panel.db.models import WebsiteDomain
+    from panel.core.clock import utcnow
+    s = _Site328(remote_id=host.id, name=name, kind="wordpress", state="running", php_version="8.4", enabled=True,
+                 proxy_secret=_cfg328.encrypt_secret(os.urandom(16).hex()), **kw)
+    _db328.session.add(s)
+    _db328.session.flush()
+    s.account, s.port = "ws%d" % s.id, 20000 + s.id % 900
+    _db328.session.add(WebsiteDomain(website_id=s.id, domain="%s.example.org" % name, is_primary=True,
+                                     verified_at=utcnow(), dns_state="matching"))
+    _db328.session.commit()
+    _ROWS328["sites"].append(s.id)
+    return s
+
+
+def _s4_seams(writes, rc):
+    from panel.ops.ssh_manager import _core as _smcore
+    from panel.routes import _shared as _shared328, websites_view as _wview328
+    from panel.ops.ssh_manager import websites as _sw328
+
+    def shell(server, user, sh, timeout=30, stdin_text=None, **k):
+        writes.append((user, stdin_text or ""))
+        return "", "", rc["rc"]
+    _p9_patch(_smcore, "shell_as_game_user", shell)
+    _p9_patch(_shared328, "game_account_write_refusal", lambda remote, user, *a, **k: None)
+    _p9_patch(_wview328, "proxy_options", lambda: {"cache_build": True})
+    _p9_patch(_sw328, "proxy_status", lambda remote, proxy=None: (True, "installed=yes\nactive=active\ncache=yes\n"))
+    _p9_patch(_sw328, "php_apply", lambda remote, site: (True, ""))
+    return _sw328
+
+
+def _written328(writes, accounts):
+    """{(account, path): text} of the bundles written as `accounts` since the last call."""
+    import base64
+    out = {}
+    for user, stdin in writes:
+        for line in stdin.splitlines():
+            path, _sep, b64 = line.partition(" ")
+            if user in accounts and path.endswith("page-cache"):
+                out[(user, path)] = base64.b64decode(b64).decode()
+    writes[:] = []
+    return out
+
+
+def _s4_page_cache(host, su):
+    from panel.routes import os_updates as _osu328
+    from panel.services import websites as _ws328
+    writes, rc = [], {"rc": 1}
+    sw = _s4_seams(writes, rc)
+    on = _site328(host, "p328-wpon", page_cache=True, page_cache_ttl=300)
+    off = _site328(host, "p328-wpoff", page_cache=False)
+    mine = {on.account, off.account}
+    for s in (on, off):
+        sw._PAGE_CACHE_NOTED.pop(s.id, None)
+    _osu328._web_page_cache_tick(_p9)          # the update-check thread's pass: this write fails on the host
+    failed = (_written328(writes, mine), sw.page_cache_noted(on.id))
+    rc["rc"] = 0
+    _osu328._web_page_cache_tick(_p9)          # its next pass
+    second = _written328(writes, mine)
+    _osu328._web_page_cache_tick(_p9)
+    eq("page cache state (the update-check thread's pass, no proxy apply): a WordPress site this process has not "
+       "written gets its state (on with its TTL, off) as its account; a write that failed is tried on the next pass, "
+       "and a site already written is not written again",
+       (failed, second, _written328(writes, mine)),
+       (({(on.account, _ws328.PAGE_CACHE_FILE): "on 300\n", (off.account, _ws328.PAGE_CACHE_FILE): "off\n"}, False),
+        {(on.account, _ws328.PAGE_CACHE_FILE): "on 300\n", (off.account, _ws328.PAGE_CACHE_FILE): "off\n"}, {}))
+    want = {(on.account, _ws328.PAGE_CACHE_FILE): "on 300\n"}
+    _g328.pop("_login_user", None)
+    r = _p9_client(su.id).post("/websites/%d/performance" % on.id, json={"opcache": True})
+    eq("page cache state: a Performance save (POST /websites/<id>/performance) that re-applies nothing writes it again "
+       "though it did not change", (r.status_code, _written328(writes, mine)), (200, want))
+    src = open(_osu328.__file__, encoding="utf-8").read()
+    loop = src[src.index("def update_check_ticker"):src.index("time.sleep(1800)")]
+    check("page cache state: the update-check thread's loop runs the pass on each of its passes (the first 30 s "
+          "after boot)", "_web_page_cache_tick(app)" in loop, loop[-400:])
+    for s in (on, off):
+        s.enabled = False
+    _db328.session.commit()
+    php = _ws328.loopback_plugin()
+    eq("Site Health (the loopback plugin): with no state file yet it says the panel has not reported the page cache, "
+       "never \"not enabled\"; a file still says on or off (control)",
+       ("if ( ! is_readable( LGSM_PANEL_PAGE_CACHE_FILE ) ) {\n\t\treturn array( null, 0 );" in php,
+        "if ( null === $on ) {" in php and "'label'       => 'The panel has not reported the page cache yet'," in php,
+        "'status'      => $on ? 'good' : 'recommended'," in php), (True, True, True))
+
+
 def _cleanup328():
     _db328.session.rollback()
     for model, ids in ((_Site328, _ROWS328["sites"]), (_GS328, _ROWS328["servers"]), (_User328, _ROWS328["users"]),
@@ -239,6 +330,9 @@ def _cleanup328():
         _gu328.forget(i)
         _u328._ADDONS_SEEN.pop(i, None)
     _osseen328.pop(_OS_ID328, None)
+    from panel.ops.ssh_manager import websites as _sw328
+    for i in _ROWS328["sites"]:
+        _sw328._PAGE_CACHE_NOTED.pop(i, None)
     _u328.forget_counts()
 
 
@@ -264,6 +358,7 @@ with _p9.app_context():
         check("part328: _s1_games ran to the end", _ran328(_s1_games, _host328, _su328), _ran328.last)
         check("part328: _s2_others ran to the end", _ran328(_s2_others, _host328, _su328), _ran328.last)
         check("part328: _s3_page ran to the end", _ran328(_s3_page), _ran328.last)
+        check("part328: _s4_page_cache ran to the end", _ran328(_s4_page_cache, _host328, _su328), _ran328.last)
         eq("part328: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips328:], [])
     finally:
         _p9_restore_all()

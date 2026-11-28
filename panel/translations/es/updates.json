@@ -110,6 +110,7 @@
   "Whether one of its scheduled tasks updates LinuxGSM is not read yet: its Scheduled tasks card says. Until then it waits for Update now.": "Aún no se ha leído si una de sus tareas programadas actualiza LinuxGSM: lo dice su tarjeta Tareas programadas. Hasta entonces espera a Actualizar ahora.",
   "WordPress may reach the two more WordPress.org addresses its Site Health and background updates need.": "WordPress puede llegar a las dos direcciones de WordPress.org más que necesitan su Salud del sitio y sus actualizaciones en segundo plano.",
   "WordPress's Site Health reads the web proxy's own page cache (a page cache it found nothing of before).": "La Salud del sitio de WordPress lee la caché de páginas del proxy web (antes no encontraba ninguna).",
+  "WordPress's Site Health says when the panel has not reported its page cache yet, instead of calling it off.": "La Salud del sitio de WordPress dice cuándo el panel aún no ha informado de su caché de páginas, en lugar de darla por desactivada.",
   "You can't change that.": "No puede cambiar eso.",
   "You don't manage anything that has updates.": "No administra nada que tenga actualizaciones.",
   "a newer build (LinuxGSM did not print which)": "una compilación más reciente (LinuxGSM no indicó cuál)",

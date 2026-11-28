@@ -54,6 +54,11 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 - **WordPress Site Health sees the page cache.** Site Health now reports the panel's real page cache instead
   of saying none was found, and cached pages no longer carry an empty Cache-Control header.
+- **Site Health sees the page cache on sites made before it could.** A WordPress site with the page cache on
+  could show "Page cache is not enabled" in Site Health until its proxy settings were applied again. The panel
+  now tells each WordPress site its page cache state shortly after it starts and when its Performance settings
+  are saved; until then Site Health says the state is not reported yet. WordPress sites are offered an Update
+  for that new Site Health text.
 
 ## [2026.11.27] — 2026-11-27
 

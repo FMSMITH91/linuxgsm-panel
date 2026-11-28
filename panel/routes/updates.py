@@ -233,6 +233,8 @@ def _addon_row(gs, k, seen, cfg, sec):
 # What each revision of a site's files (services/websites.SITE_FILES_REV) changes, for the kinds it changes; a site
 # behind on an older one, or on one that changes nothing it can see, reads the general line.
 FILES_NOTES = {
+    "files-8": (("wordpress",), "WordPress's Site Health says when the panel has not reported its page cache yet, "
+                                "instead of calling it off."),
     "files-7": (("wordpress",), "WordPress's Site Health reads the web proxy's own page cache (a page cache it found "
                                 "nothing of before)."),
     "files-6": (("php", "wordpress", "phpbb"), "Its answers no longer name the web proxy's private header in Vary."),
