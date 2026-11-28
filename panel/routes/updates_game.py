@@ -133,9 +133,7 @@ def _refused(msg, code):
 
 
 def _game_target(server_id):
-    """(the server, None) when the viewer may run its Update and it has one to install, else (None, the reply)."""
-    if not may_update(current_user):
-        return None, _refused(S_DENIED, 403)
+    """(the server, None) when it has a game update to install, else (None, the reply). The route checks who first."""
     gs = get_game(server_id)
     if not gs.installed or not gs.supports_update:
         return None, _refused(S_NO_UPDATE, 400)
@@ -148,6 +146,8 @@ def register(app):
     @login_required
     @server_access_required
     def api_updates_game(server_id):
+        if not (current_user.is_superadmin or has_permission(current_user, _perm_for_action("update"))):
+            return _refused(S_DENIED, 403)     # the server page's Update permission (UPDATE_SERVER)
         gs, refused = _game_target(server_id)
         if refused:
             return refused
@@ -159,12 +159,16 @@ def register(app):
         else:
             return _refused(S_DENIED, 400)
         U.forget_counts()
-        return jsonify({"success": bool(ok), "message": i18n.tr(msg), "queued": bool(gs.update_pending)})
+        # Said as the server page says its own actions' answers (Sentences, translated whole).
+        from panel.routes.server_detail import _r15e_said
+        return jsonify({"success": bool(ok), "message": _r15e_said(msg), "queued": bool(gs.update_pending)})
 
     @app.route("/api/updates/game/<int:server_id>/backup", methods=["POST"])
     @login_required
     @server_access_required
     def api_updates_game_backup(server_id):
+        if not (current_user.is_superadmin or has_permission(current_user, _perm_for_action("update"))):
+            return _refused(S_DENIED, 403)     # the server page's Update permission (UPDATE_SERVER)
         gs, refused = _game_target(server_id)
         if refused:
             return refused

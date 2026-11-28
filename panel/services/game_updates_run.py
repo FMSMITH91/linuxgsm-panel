@@ -31,6 +31,7 @@ STEP_TIMEOUT = {"stop": 300, "start": 300, "backup": 3 * 3600, "update": 3 * 360
 S_WARNED = "Players were warned in the game; the update starts in 1 minute."
 S_QUEUED = "Queued: {name} updates its game once no players are on."
 S_UNQUEUED = "No longer queued: {name} does not wait to update."
+S_STEP_LATE = "{action} did not finish within {n} minutes."
 
 
 def _sd():
@@ -38,7 +39,7 @@ def _sd():
     return server_detail
 
 
-def _refusal(gs):
+def _account_refusal(gs):
     from panel.routes._shared import game_account_write_refusal
     return game_account_write_refusal(gs.remote, gs.short_name)
 
@@ -57,7 +58,7 @@ def update_now(app, gs, user):
     from panel.db.models import row_birth
     from panel.services import schedule_chains as _sch
     from panel.services.monitoring import _cached_player_count
-    why = _refusal(gs)
+    why = _account_refusal(gs)
     if why:
         return False, why
     verb = _sch.say_verb(gs.game_type)
@@ -100,7 +101,7 @@ def queue_when_empty(gs, user, on):
     from panel.db.models import db
     from panel.security.auth import log_action
     if on:
-        why = _refusal(gs)
+        why = _account_refusal(gs)
         if why:
             return False, why
     gs.update_pending = bool(on)
@@ -130,7 +131,7 @@ def settle_queued(app, gs, decision):
     if (_r39a_wipe_running(gs.id) or _backup_in_progress(gs.id) or uninstall_running(gs.id)
             or r36j_route_jobs(gs.id)):
         return False
-    why = _refusal(gs)
+    why = _account_refusal(gs)
     if why:
         gs.update_pending = False
         db.session.commit()
@@ -154,9 +155,9 @@ def _run_wait(app, gs, action, origin):
         done.set()
     ok, msg = _sd()._run_action(app, gs, gs.remote, action, None, origin=origin, on_done=_on_done)
     if not ok:
-        return False, i18n.tr(msg)
+        return False, str(msg)
     if not done.wait(STEP_TIMEOUT[action]):
-        return False, "%s did not finish within %d minutes" % (action, STEP_TIMEOUT[action] // 60)
+        return False, str(i18n.Sentence(S_STEP_LATE, action=action, n=STEP_TIMEOUT[action] // 60))
     return got.get("ok"), got.get("detail") or ""
 
 
@@ -173,7 +174,7 @@ def update_game(app, gs, who, backup):
     (_run_action's own); a failure also sends the auto_update_failed alert.
     """
     from panel.routes._shared import get_server_status
-    why = _refusal(gs)
+    why = _account_refusal(gs)
     if why:
         _skipped(gs, i18n.tr(why), who)
         return False

@@ -93,6 +93,7 @@
   "a newer version of the add-on": "une version plus récente du module",
   "automatic": "automatique",
   "the panel had not recorded its previous image": "le panneau n'avait pas enregistré son image précédente",
+  "{action} did not finish within {n} minutes.": "{action} ne s'est pas terminé en {n} minutes.",
   "{n} package(s), {sec} of them security updates.": "{n} paquet(s), dont {sec} de sécurité.",
   "{n} update(s) can run now without kicking players.": "{n} mise(s) à jour peuvent s'exécuter maintenant sans expulser de joueurs.",
   "{n} update(s) ready: {what}": "{n} mise(s) à jour prête(s) : {what}",

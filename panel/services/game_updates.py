@@ -184,7 +184,7 @@ def check_server(gs):
     if busy_reason(gs):
         return None
     try:
-        out, err, _rc = _sm.run_as_game_user(gs.remote, gs.short_name, "check-update", timeout=180,
+        out, err, _rc = _sm.run_as_game_user(gs.remote, gs.short_name, "check-update", timeout=110,
                                              selfname=gs.lgsm_name)
     except Exception:  # noqa: BLE001 - a host that did not answer is tried again later
         out, err = "", ""
