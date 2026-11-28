@@ -24,6 +24,7 @@ _NAMED262 = {
     _os262.PUBLIC_IP: ("the public address lookup", "the public address"),
     _os262.DBIP: ("DB-IP's country database for B3", "DB-IP's country database for B3"),
     _os262.WEBSITE_ALLOW_URL: ("website allow lists read from an address", "website allow lists read from an address"),
+    _os262.GAME_UPDATE_CHECK: ("the daily game update check", "the daily game update check"),
 }
 
 

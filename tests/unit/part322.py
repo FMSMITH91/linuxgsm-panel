@@ -613,6 +613,8 @@ def _s9_sites(st):
     _db322.session.commit()
     _p9_patch(_ua, "_site_ids", lambda: [busy.id])
     _p9_patch(_ua, "_server_ids", lambda: [])
+    from panel.services import game_updates as _gu      # its daily game check reads every server: part323's
+    _p9_patch(_gu, "check_pass", lambda now=None: None)
     _p9_patch(_sw322, "recent_requests", lambda remote, site: 2)
     _ua.tick(_p9)
     su = _Client322(st.su.id)

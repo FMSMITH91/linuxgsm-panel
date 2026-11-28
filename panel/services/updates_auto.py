@@ -7,15 +7,21 @@ window (_DONE): one that is busy, or that fails, waits for the next night.
 WHAT. A website whose image or site files changed (routes/websites.update_available) and an installed add-on
 whose image differs from the catalog's (routes/addons_change.update_reason), when automatic updates are on for
 it or the update is a security one (the signed catalog's `security` section): security updates are applied
-even where an item's automatic updates are off. Panel, host packages and LinuxGSM keep their own settings
-(the update check, unattended-upgrades on each host, LinuxGSM's own cron jobs).
+even where an item's automatic updates are off. A game server's game whose newer build the daily check found
+(services/game_updates), when its automatic updates are on (a default per game family) and no scheduled task of
+its own runs LinuxGSM's update (game_updates_run.update_game). Panel, host packages and LinuxGSM keep their own
+settings (the update check, unattended-upgrades on each host, a server's update-lgsm task).
+
+THE DAILY CHECK. Each pass also reads one game server's check-update (game_updates.check_pass): the one read
+longest ago, about once a day each, never while the panel runs something else on it.
 
 ONE AT A TIME. The loop runs one update, waits for its end, then takes the next (OWASP Top 10 2025 A03,
 "How to prevent": avoid updating everything at once; staged rollouts).
 
 BUSY. A website with open connections from the web proxy (it answered a visitor in the last minutes:
 ssh_manager.websites.recent_requests), or whose host did not say, waits; an add-on whose game server has
-players on (the player poll's last count) waits. A skip is recorded in the history (update_skipped).
+players on (the player poll's last count) waits, and so does a game update, also when a running server's count
+is not known. A skip is recorded in the history (update_skipped).
 
 FAILURE. The update's own code runs (the website's Update, the add-on's Update with the account's write
 refusal first). When it fails, the item is put back on what it ran before: the website installed again from
@@ -64,6 +70,10 @@ def tick(app, now=None):
                 _site_pass(app, site_id, now)
             for gs_id in _server_ids():
                 _server_pass(app, gs_id, now)
+            for gs_id in _server_ids():
+                _game_pass(app, gs_id, now)
+            from panel.services import game_updates as _gu
+            _gu.check_pass(now)
     finally:
         RUN_LOCK.release()
 
@@ -287,3 +297,36 @@ def rollback_addon(gs, addon_id):
     except Exception:
         return False
     return rc == 0 and "ADDON_ROLLED_BACK" in (out or "")
+
+
+# ── game servers' games ────────────────────────────────────────────────────────────────────────
+def _game_pass(app, gs_id, now):
+    """Update one server's game in the window: a newer build found, automatic updates on, nobody on it."""
+    from panel.db.models import GameServer, db
+    from panel.services import game_updates as _gu, game_updates_run as _gur
+    gs = db.session.get(GameServer, gs_id)
+    if gs is None or gs.remote is None or _gu.seen(gs.id).get("state") != "available":
+        return
+    cfg, ref = U.settings(), "game:%d" % gs.id
+    key = _due(ref, gs.remote, cfg, now)
+    if key is None or not U.game_auto_on(gs, cfg) or (U.lgsm_cron_seen(gs.id) or {}).get("game"):
+        return
+    _DONE[ref] = key
+    why = game_busy(gs)
+    if why:
+        _gur._skipped(gs, why, ACTOR)
+        return
+    _gur.update_game(app, gs, ACTOR, str(gs.id) in cfg["backup"])
+    U.forget_counts()
+
+
+def game_busy(gs):
+    """Why a game update waits for the next window ("" when it may run): players on, an unknown count, a hold."""
+    from panel.services import game_updates as _gu
+    from panel.services.monitoring import _cached_player_count
+    players = _cached_player_count(gs.id)
+    if isinstance(players, int) and players > 0:
+        return "it has players on"
+    if players is None and gs.status == "online":
+        return "its player count is not known"
+    return _gu.busy_reason(gs)

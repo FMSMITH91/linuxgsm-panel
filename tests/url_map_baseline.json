@@ -3426,6 +3426,38 @@
       "POST"
     ]
   },
+  "POST /api/updates/game/<int:server_id>": {
+    "endpoint": "api_updates_game",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_updates_game"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/game/<int:server_id>/backup": {
+    "endpoint": "api_updates_game_backup",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_updates_game_backup"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/games/check": {
+    "endpoint": "api_updates_games_check",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_games_check"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/updates/safe": {
     "endpoint": "api_updates_safe",
     "guards": [

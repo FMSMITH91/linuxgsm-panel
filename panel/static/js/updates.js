@@ -1,7 +1,8 @@
 // The Updates page (templates/updates.html). GET /api/updates:
 //   {groups: [{key, title, items: [{kind, ref, name, host, what: [..], notes: [{title, url}], cost, security,
-//     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up} | {href} | null,
-//     link}]}], count, settings: {start, end, can_edit, owasp_auto, off},
+//     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up, confirm} | {href} |
+//     null, link; a game row also: auto_why, backup, backup_post, later: {post, queued}}]}], count,
+//    settings: {start, end, can_edit, owasp_auto, off, checking, can_check},
 //    history: [{at, at_host (on the clock of the host the row is about), who, action, target, ok, detail}]}
 // Every text the server sends is already in the viewer's language. Update now runs the item's own route
 // (or opens the card that runs it, with that card's confirmation); nothing here decides what the server allows.
@@ -15,7 +16,9 @@
   var HISTORY_SHOWN = 10;
   var ACTIONS = {panel_self_update: 'Panel', os_update_run: 'Host system', remote_os_update: 'Host system',
     'update-lgsm_server': 'LinuxGSM', update_server: 'Game update', 'force-update_server': 'Game update',
+    update_complete: 'Game update', update_when_empty: 'Game update', update_warned: 'Game update',
     addon_update: 'Add-on', website_update: 'Website', update_skipped: 'Skipped'};
+  var polls = 0;
   var last = null;
 
   function el(tag, cls, text) {
@@ -51,7 +54,8 @@
     d.groups.forEach(function (g) { list.appendChild(groupCard(g)); });
     var safe = 0, off = [];
     d.groups.forEach(function (g) {
-      g.items.forEach(function (r) { if (r.safe && r.action && r.action.post) safe++; if (r.auto === false) off.push(r.name); });
+      // A game switched off (or off by its family's default) says why on its own row, not in this warning.
+      g.items.forEach(function (r) { if (r.safe && r.action && r.action.post) safe++; if (r.auto === false && r.kind !== 'game') off.push(r.name); });
     });
     var b = document.getElementById('upd-safe');
     if (b) { b.disabled = !safe; b.title = safe ? TF('{n} update(s) can run now without kicking players.', {n: safe}) : ''; }
@@ -59,7 +63,26 @@
     renderOff(off);
     renderSettings(d.settings || {});
     renderHistory(d.history || [], false);
+    checkButton(d.settings || {});
   }
+
+  // Check now: LinuxGSM's check-update on every game server the viewer may read, one at a time on the server; the
+  // list is read again every 10 s while some are left (at most 30 times).
+  function checkButton(s) {
+    var b = document.getElementById('upd-games-check');
+    if (!b) return;
+    b.hidden = !s.can_check;
+    b.disabled = !!s.checking;
+    if (s.checking && polls < 30) { polls++; setTimeout(load, 10000); } else if (!s.checking) polls = 0;
+  }
+  window.updGamesCheck = function () {
+    var b = document.getElementById('upd-games-check');
+    if (b) b.disabled = true;
+    post(MOUNT + '/api/updates/games/check', {}).then(function (d) {
+      say('upd-msg', d.message || '', d.success ? 'ok' : 'error');
+      if (d.started) setTimeout(load, 10000); else if (b) b.disabled = false;
+    }).catch(function () { say('upd-msg', T('Couldn\'t read the updates.'), 'error'); if (b) b.disabled = false; });
+  };
 
   // A greyed "Update everything safe now" says why beside it (the button stays in its place).
   function safeWhy(groups, safe) {
@@ -122,10 +145,52 @@
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');
     if (r.action) ctl.appendChild(actionButton(r, out));
+    if (r.later) ctl.appendChild(laterButton(r, out));
     if (r.auto_editable) ctl.appendChild(autoSwitch(r, out));
+    if (r.backup_post) ctl.appendChild(backupSwitch(r, out));
     wrap.appendChild(ctl);
+    if (r.auto_why) wrap.appendChild(line('info-circle', r.auto_why, 'text-secondary'));
     wrap.appendChild(out);
     return wrap;
+  }
+  // Update when empty, or no longer wait: the server's own queue (the due-actions sweep runs it once nobody is on).
+  function laterButton(r, out) {
+    var b = el('button', 'btn btn-sm btn-outline-secondary');
+    b.type = 'button';
+    var label = function (queued) {
+      b.textContent = '';
+      b.appendChild(icon(queued ? 'x-circle' : 'hourglass'));
+      b.appendChild(document.createTextNode(' ' + (queued ? T('Don\'t wait') : T('Update when empty'))));
+    };
+    var queued = !!r.later.queued;
+    label(queued);
+    b.addEventListener('click', function () {
+      b.disabled = true;
+      post(r.later.post, {when: queued ? 'cancel' : 'empty'}).then(function (d) {
+        b.disabled = false;
+        out.className = 'small mt-1 ' + (d.success ? 'text-success' : 'text-danger');
+        out.textContent = d.message || '';
+        if (d.success) { queued = !!d.queued; label(queued); }
+      }).catch(function () { b.disabled = false; });
+    });
+    return b;
+  }
+  function backupSwitch(r, out) {
+    var box = el('div', 'form-check mb-0');
+    var id = 'upd-backup-' + r.ref.replace(/[^a-z0-9]/gi, '-');
+    var cb = el('input', 'form-check-input');
+    cb.type = 'checkbox'; cb.id = id; cb.checked = !!r.backup;
+    var lab = el('label', 'form-check-label small', T('Back up first at night'));
+    lab.htmlFor = id;
+    cb.addEventListener('change', function () {
+      cb.disabled = true;
+      post(r.backup_post, {on: cb.checked}).then(function (d) {
+        cb.disabled = false;
+        if (!d.success) { cb.checked = !cb.checked; out.className = 'small mt-1 text-danger'; out.textContent = d.message || ''; }
+      }).catch(function () { cb.disabled = false; cb.checked = !cb.checked; });
+    });
+    box.appendChild(cb); box.appendChild(lab);
+    return box;
   }
   function lines(what) {
     var ul = el('ul', 'small mb-1 ps-3');
@@ -168,7 +233,12 @@
     b.appendChild(document.createTextNode(' ' + T('Update now')));
     b.addEventListener('click', function () {
       var go = function () { runUpdate(r, b, out); };
-      if (r.action.step_up && window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
+      var run = function () { if (r.action.step_up && window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); };
+      // A game update can kick players: what it costs is asked first (the row's own cost line).
+      if (r.action.confirm && window.confirmDialog) {
+        window.confirmDialog({title: T('Update now'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Update now'),
+          onConfirm: run, bodyText: r.action.confirm});
+      } else run();
     });
     return b;
   }

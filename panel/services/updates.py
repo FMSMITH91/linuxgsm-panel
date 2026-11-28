@@ -36,7 +36,8 @@ CFG = "auto_updates"
 DEFAULT_START, DEFAULT_END = "04:00", "05:00"
 OWASP_AUTO = True
 _HHMM = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
-REF_RE = re.compile(r"(?:website:[1-9][0-9]{0,9}|addon:[1-9][0-9]{0,9}:[a-z][a-z0-9-]{0,31})\Z")
+REF_RE = re.compile(r"(?:website:[1-9][0-9]{0,9}|addon:[1-9][0-9]{0,9}:[a-z][a-z0-9-]{0,31}|game:[1-9][0-9]{0,9})\Z")
+_GAME_ID = re.compile(r"[1-9][0-9]{0,9}\Z")
 _OFF_MAX = 5000
 # What each kind of update costs, in the words the rows show.
 COST_SITE = "A few seconds offline. Its files, databases and settings stay."
@@ -58,6 +59,9 @@ _LGSM_SEEN = {}           # server id -> {"at": epoch, "release", "latest", "beh
 _LGSM_CRON = {}           # server id -> {"at": epoch, "schedule": the update-lgsm task's cron schedule, "" when none}
 # An update-lgsm in a crontab line's command: LinuxGSM's own command or its short form, after the server's script.
 _LGSM_CRON_RE = re.compile(r"(?:^|\s)(?:update-lgsm|ul)(?:\s|$)")
+# The game's own update in a crontab line: LinuxGSM's update or its short form (not mods-update, force-update or
+# update-lgsm, whose names only contain it).
+_GAME_CRON_RE = re.compile(r"(?:^|\s)(?:update|u)(?:\s|$)")
 _COUNTS = {}              # user id -> (epoch, count)
 _SEEN_LOCK = threading.Lock()
 
@@ -75,7 +79,19 @@ def settings():
     if start == end:
         start, end = DEFAULT_START, DEFAULT_END
     off = raw.get("off") if isinstance(raw.get("off"), list) else []
-    return {"start": start, "end": end, "off": sorted({r for r in off if isinstance(r, str) and REF_RE.match(r)})}
+    return {"start": start, "end": end, "off": sorted({r for r in off if isinstance(r, str) and REF_RE.match(r)}),
+            "games": _games(raw.get("games")), "backup": _game_ids(raw.get("backup"))}
+
+
+def _games(raw):
+    """{server id (str): on} of the game servers whose automatic updates someone switched (the rest: the default)."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and _GAME_ID.match(k) and isinstance(v, bool)}
+
+
+def _game_ids(raw):
+    """The game server ids (str) of a stored list, the malformed ones dropped."""
+    return sorted({k for k in (raw if isinstance(raw, list) else []) if isinstance(k, str) and _GAME_ID.match(k)})
 
 
 def save_window(start, end):
@@ -99,12 +115,35 @@ def set_auto(ref, on):
 
     def _mutate(cfg):
         raw = _raw(cfg)
+        if ref.startswith("game:"):
+            # A game's switch has a default per family (game_updates.default_auto): the choice is stored either way.
+            raw["games"] = dict(_games(raw.get("games")), **{ref[5:]: bool(on)})
+            cfg[CFG] = raw
+            return
         off = {r for r in (raw.get("off") or []) if isinstance(r, str) and REF_RE.match(r)}
         off = (off - {ref}) if on else (off | {ref})
         raw["off"] = sorted(off)[:_OFF_MAX]
         cfg[CFG] = raw
     update_config(_mutate)
     return None
+
+
+def set_backup_first(gs_id, on):
+    """Whether the nightly window backs game server `gs_id` up before it updates the game."""
+    def _mutate(cfg):
+        raw = _raw(cfg)
+        ids = set(_game_ids(raw.get("backup")))
+        ids = (ids | {str(gs_id)}) if on else (ids - {str(gs_id)})
+        raw["backup"] = sorted(ids)[:_OFF_MAX]
+        cfg[CFG] = raw
+    update_config(_mutate)
+
+
+def game_auto_on(gs, cfg=None):
+    """Whether the nightly window updates game server `gs`'s game: its switch, else its family's default."""
+    from panel.services import game_updates as _gu
+    got = (cfg or settings())["games"].get(str(gs.id))
+    return got if isinstance(got, bool) else _gu.default_auto(gs.game_type)[0]
 
 
 def auto_on(ref, cfg=None):
@@ -200,8 +239,10 @@ def note_lgsm_cron(gs_id, jobs):
     if not isinstance(jobs, list):
         return
     found = [j for j in jobs if isinstance(j, dict) and _LGSM_CRON_RE.search(str(j.get("command") or ""))]
+    game = [j for j in jobs if isinstance(j, dict) and _GAME_CRON_RE.search(str(j.get("command") or ""))]
     with _SEEN_LOCK:
-        _LGSM_CRON[gs_id] = {"at": time.time(), "schedule": str(found[0].get("schedule") or "")[:60] if found else ""}
+        _LGSM_CRON[gs_id] = {"at": time.time(), "schedule": str(found[0].get("schedule") or "")[:60] if found else "",
+                             "game": str(game[0].get("schedule") or "")[:60] if game else ""}
 
 
 def lgsm_cron_seen(gs_id):
@@ -217,6 +258,8 @@ def forget_server(gs_id):
         _ADDONS_SEEN.pop(gs_id, None)
         _LGSM_SEEN.pop(gs_id, None)
         _LGSM_CRON.pop(gs_id, None)
+    from panel.services import game_updates as _gu
+    _gu.forget(gs_id)
 
 
 def addons_seen(gs_id):

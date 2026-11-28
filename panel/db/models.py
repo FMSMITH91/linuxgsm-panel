@@ -833,6 +833,7 @@ class GameServer(db.Model):
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
     stop_pending = db.Column(db.Boolean, default=False)     # queued to stop once players leave
+    update_pending = db.Column(db.Boolean, default=False)   # queued to update its game once players leave
     # The panel is rebooting this server's host: what it found the server doing, who brings it
     # back, and how far that has got (JSON, see panel/services/host_reboot.py). NULL otherwise.
     # In the database, not in memory, because the panel host's own reboot takes the panel with it.
@@ -1920,6 +1921,7 @@ _LIGHT_MIGRATIONS = {
     ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
     ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
     ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+    ("game_server", "update_pending"): "ALTER TABLE game_server ADD COLUMN update_pending BOOLEAN DEFAULT 0",
     # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
     # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
     # rather than withholding it from a row whose cause nobody can name any more.

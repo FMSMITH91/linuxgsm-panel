@@ -27,7 +27,7 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
                                        _mark_expected_offline, want_fresh_player_counts)
-from panel.services import console_secrets as _csec, lgsm_players as _lgp
+from panel.services import console_secrets as _csec, game_updates as _gu, lgsm_players as _lgp
 from panel.services import port_check as _pck
 from panel.routes import _lgsm_update as _lgu
 import concurrent.futures
@@ -37,6 +37,7 @@ import posixpath
 import re
 import shlex
 import threading
+import time
 from panel.core import i18n
 from sqlalchemy.exc import (SQLAlchemyError)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag,
@@ -419,6 +420,8 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     if action == _lgu.ACTION:
         return _lg265_after_update_lgsm(app, gs, who, (name, before, rc, clean))
     if action in READONLY_ACTIONS:
+        if action == "check-update":
+            _gu.note_output(who[3], clean)      # the Updates page's game row says what this said
         return True, f"{action}: {shown[:_DTL_REPLY_MAX] or 'no output'}"
     ok, msg = _run_sync_outcome(action, name, rc, clean)
     note = _lg265_ahl_note(action, clean)
@@ -1155,12 +1158,14 @@ def _bg_action(app, gs, remote, action, on_done=None):
                                    detail=detail[:300], server=claim_row(GameServer, server_id, born))
                         return
                     _db_dump_before(_app, server_id, remote, short_name, action)
+                    t0 = time.time()
                     with _r41r_audit_raise(f"{action}_complete", name, (None, None), (server_id, born)):
                         out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
                                                  monitor=autostart)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = claim_row(GameServer, server_id, born)
                 oc = _lgp.outcome_of(out, rc, action)
+                _gu.after_run(server_id, action, out, rc, oc is None, time.time() - t0)   # the Updates page's row
                 if oc is not None:
                     # Postponed (update, backup) or refused (workshop-update, validate): said as
                     # that, and nothing was changed on the host, so nothing below applies.

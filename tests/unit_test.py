@@ -2004,8 +2004,7 @@ _r16d_wrap_ts_handles()
 # part153 (a push to main reuses the merged pull request's pass on the same tree: the reuse script run
 # against a stand-in gh in a fixture repository, and the workflows' wiring) imports part01, 05 and 29.
 # part154 (review 1107's firewall and lock-out findings: the auto-block spares the panel's own source,
-# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108,
-# 116, 135 and 136.
+# and the guards it found short) drives part135's stand-in hosts and part12's app; imports part01, 12, 108, 116, 135 and 136.
 # part155 (review 1107 B: FastDL refused on an unread LinuxGSM release, scheduled wipes and the other
 # game operations) drives part12's app with every host call stubbed; imports part01 and 12.
 # part156 (review 1107's reboot, update, install and What's new fixes) drives part12's app and runs
@@ -2016,8 +2015,7 @@ _r16d_wrap_ts_handles()
 # runs install.sh's functions through part06's extractor; imports part01 and 06.
 # part169 (CI: coverage, js coverage and Lighthouse skip what they do not measure) imports part01.
 # part170 (a Java Minecraft server's operators, whitelist and bans: the console lines and their refusals,
-# the routes on part12's app with every host call stubbed, the page and its card script in node) imports
-# part01, 12 and 75.
+# the routes on part12's app with every host call stubbed, the page and its card script in node) imports part01, 12 and 75.
 # part171 (a PaperMC server's plugins from Modrinth: the checks on ids, queries, file names and hashes with the
 # network replaced, the routes on part12's app with every host call stubbed, the page and its card script in
 # node) imports part01, 12 and 75.
@@ -2145,6 +2143,7 @@ _r16d_wrap_ts_handles()
 # checks) drives part12's app; imports part01 and 12. part320 (the Updates page, the nightly window) imports part01 and 12.
 # part309 (History from 24 hours to a year: the hourly rollup tick, the long ranges' routes, the pages and their scripts) drives part12's app and node; imports
 # part01, 12, 75 and 131. part316 (websites' fixes) imports part01, 12 and 301. part319 (websites' egress proxy and gate) imports part01, 12 and 301.
+# part323 (game updates on the Updates page: the rows, Update now and when empty, the nightly window, the daily check) imports part01, 12, 301 and 322.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2166,7 +2165,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
     "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
     "part298", "part299", "part300", "part301", "part302", "part305", "part306", "part294", "part297", "part296", "part295", "part303", "part307", "part308",
-    "part309", "part310", "part311", "part317", "part313", "part314", "part315", "part316", "part318", "part319", "part320", "part321", "part322", "part15")
+    "part309", "part310", "part311", "part317", "part313", "part314", "part315", "part316", "part318", "part319", "part320", "part321", "part322", "part323",
+    "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

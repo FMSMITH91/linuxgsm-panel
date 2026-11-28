@@ -28,7 +28,7 @@ More screenshots: [features.md](features.md#screenshots).
 - One host page for the panel and every remote: OS updates, UFW firewall with lock-out checks, fail2ban and auto-block, SSH lockdown, clean reboots that bring running servers back.
 - Users and groups with per-action, per-server permissions; a web terminal; audit logging; a Databases manager for game servers' MariaDB/MySQL databases.
 - Alerts to Telegram, Discord, ntfy and your own phone or browser, and a Telegram/Discord command bot.
-- One Updates page for the panel, host packages, LinuxGSM, add-ons and websites; websites and add-ons update by themselves at night, one at a time, and a failed update is undone.
+- One Updates page for the panel, host packages, the games themselves, LinuxGSM, add-ons and websites; websites, add-ons and games update by themselves at night, one at a time, never with players on, and a failed website or add-on update is undone.
 - Websites: plain, PHP and Node.js sites and one-click WordPress, phpBB, Drupal, SMF and MyBB, each in its own locked-down container, with automatic HTTPS and logins for customers that see only their own sites.
 
 The full list: [features.md](features.md).

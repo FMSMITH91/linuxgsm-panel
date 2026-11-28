@@ -113,6 +113,9 @@ def _seams320():
     _p9_patch(_ua320, "_site_ids", lambda: list(_ROWS320["sites"]))
     _p9_patch(_ua320, "_server_ids", lambda: list(_ROWS320["servers"]))
     _p9_patch(_ua320, "_pending_addons", lambda gs, cfg: [])
+    # The window's daily game check reads every installed server of the database: part323 drives it.
+    from panel.services import game_updates as _gu320
+    _p9_patch(_gu320, "check_pass", lambda now=None: None)
     _p9_patch(_sw320, "_as_site", _as_site320)
     _p9_patch(_sw320, "_ids", lambda remote, site: ((1005, 1005), dict(_PROBE320)))
     _p9_patch(_sw320, "runtime_ready", lambda remote: "")

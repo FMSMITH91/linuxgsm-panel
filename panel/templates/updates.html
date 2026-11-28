@@ -11,6 +11,8 @@
     {% if allowed %}
     <div class="d-flex flex-wrap align-items-center gap-2">
       <span id="upd-safe-why" class="small text-secondary" hidden></span>
+      <button type="button" id="upd-games-check" class="btn btn-outline-secondary btn-sm text-nowrap" data-action="updGamesCheck" hidden>
+        <i class="bi bi-arrow-repeat"></i> Check games now</button>
       <button type="button" id="upd-safe" class="btn btn-primary btn-sm text-nowrap" data-action="updSafe" disabled>
         <i class="bi bi-lightning-charge"></i> Update everything safe now</button>
     </div>
@@ -24,7 +26,7 @@
   <div id="upd-list" aria-live="polite"><p class="small text-secondary mb-0">Loading updates…</p></div>
   <div class="upd-cols">
     {% call fold('Nightly window', id='upd-window', icon='moon-stars') %}
-    <p class="small mb-1">Websites and add-ons update between these times on each host's own clock, one at a time. A website that answered visitors in the last minutes, or an add-on whose game server has players on, waits for the next night. A failed update is put back on what it ran before, and you get an alert.</p>
+    <p class="small mb-1">Websites, add-ons and games update between these times on each host's own clock, one at a time. A website that answered visitors in the last minutes, or an add-on or game whose server has players on, waits for the next night. A failed website or add-on update is put back on what it ran before; any failure sends an alert.</p>
     <p class="small text-secondary mb-2">OWASP recommends: automatic updates on for every item (Top 10 A03, Software Supply Chain Failures: patch in a timely fashion, never everything at once).</p>
     <div class="d-flex flex-wrap gap-2 align-items-end">
       <div><label for="upd-start" class="form-label small mb-0">Starts</label>

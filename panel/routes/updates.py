@@ -15,9 +15,9 @@ POST /api/updates/safe    "Update everything safe now": every listed update this
                           (step-up, as an add-on's Update is): it runs new images as the servers' accounts.
 
 Who sees what: the panel's update and the panel host's packages a superadmin; another host's packages who may
-manage it (remote_vps.os_update_hosts); a game server's LinuxGSM who may run update-lgsm on it; its add-ons
-who holds Manage add-ons on it; a website whoever may see it (a customer their own sites), its Update now only
-who administers it.
+manage it (remote_vps.os_update_hosts); a game server's game and its LinuxGSM who may run its Update and update-lgsm
+(routes/updates_game for the game's rows and routes); its add-ons who holds Manage add-ons on it; a website whoever
+may see it (a customer their own sites), its Update now only who administers it.
 """
 import re
 import threading
@@ -30,12 +30,14 @@ from panel.core import i18n
 from panel.core.http import _json_body
 from panel.db.models import AuditLog, GameServer, db
 from panel.security.account_guard import step_up_required
-from panel.security.auth import (MANAGE_ADDONS, MANAGE_REMOTES, MANAGE_WEBSITES, VIEW_WEBSITES, _perm_for_action,
-                                 get_user_servers, has_permission, log_action, superadmin_required)
+from panel.security.auth import (MANAGE_ADDONS, MANAGE_REMOTES, MANAGE_WEBSITES, VIEW_CONSOLE, VIEW_WEBSITES,
+                                 _perm_for_action, get_user_servers, has_permission, log_action, superadmin_required)
+from panel.routes import updates_game as _ug
 from panel.services import updates as U, updates_auto as UA, websites_access as _wa
 
 HISTORY_ACTIONS = ("panel_self_update", "os_update_run", "remote_os_update", "update-lgsm_server", "update_server",
-                   "force-update_server", "addon_update", "website_update", "update_skipped")
+                   "force-update_server", "update_complete", "update_when_empty", "update_warned", "addon_update",
+                   "website_update", "update_skipped")
 HISTORY_MAX = 40
 _LGSM = "update-lgsm"
 S_NOTHING_SAFE = "Nothing to update that is safe to run now."
@@ -57,7 +59,7 @@ def may_open(user):
     if not getattr(user, "is_authenticated", False):
         return False
     return bool(user.is_superadmin or has_permission(user, MANAGE_REMOTES) or _may_addons(user)
-                or _may_lgsm(user) or _wa.can_open_page(user))
+                or _may_lgsm(user) or _ug.may_update(user) or _wa.can_open_page(user))
 
 
 def nav_url():
@@ -260,16 +262,16 @@ def _site_rows(user, cfg, sec):
     return rows
 
 
-GROUPS = (("panel", "Panel"), ("os", "Host system"), ("lgsm", "Game servers"), ("addon", "Add-ons"),
-          ("website", "Websites"))
+GROUPS = (("panel", "Panel"), ("os", "Host system"), ("game", "Game servers"), ("lgsm", "LinuxGSM"),
+          ("addon", "Add-ons"), ("website", "Websites"))
 
 
 def collect(user):
     """{"groups": [{key, title, items}], "count"}: every update `user` may see, grouped as the page shows them."""
     cfg, sec = U.settings(), U.security()
-    servers = _servers(user) if (_may_lgsm(user) or _may_addons(user)) else []
-    rows = (_panel_rows(user) + _os_rows(user) + _lgsm_rows(user, servers) + _addon_rows(user, servers, cfg, sec)
-            + _site_rows(user, cfg, sec))
+    servers = _servers(user) if (_may_lgsm(user) or _may_addons(user) or _ug.may_update(user)) else []
+    rows = (_panel_rows(user) + _os_rows(user) + _ug.game_rows(user, servers, cfg) + _lgsm_rows(user, servers)
+            + _addon_rows(user, servers, cfg, sec) + _site_rows(user, cfg, sec))
     groups = [{"key": k, "title": i18n.tr(t), "items": [r for r in rows if r["kind"] == k]} for k, t in GROUPS]
     return {"groups": [g for g in groups if g["items"]], "count": len(rows)}
 
@@ -324,7 +326,8 @@ def history(user):
 
 def _settings_json(user, cfg):
     return {"start": cfg["start"], "end": cfg["end"], "can_edit": bool(user.is_superadmin),
-            "owasp_auto": U.OWASP_AUTO, "off": len(cfg["off"])}
+            "owasp_auto": U.OWASP_AUTO, "off": len(cfg["off"]), "checking": _ug.checking(),
+            "can_check": bool(user.is_superadmin or has_permission(user, VIEW_CONSOLE))}
 
 
 # ── Update everything safe now ─────────────────────────────────────────────────────────────────
@@ -390,6 +393,7 @@ def _auto_target(ref, on):
 def register(app):
     """The page, its API and the nav entry (updates_nav). The nightly window's loop is os_updates's to start."""
     app.jinja_env.globals["updates_nav"] = nav_url
+    _ug.register(app)
 
     @app.route("/updates")
     @login_required
@@ -431,7 +435,8 @@ def register(app):
     @login_required
     def api_updates_auto():
         # Who may update something with a switch (an add-on, a website); each item is checked again below.
-        if not (has_permission(current_user, MANAGE_ADDONS) or has_permission(current_user, MANAGE_WEBSITES)):
+        if not (has_permission(current_user, MANAGE_ADDONS) or has_permission(current_user, MANAGE_WEBSITES)
+                or _ug.may_update(current_user)):
             return jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 403
         data = _json_body()
         ref, on = data.get("ref"), data.get("on")
@@ -441,7 +446,8 @@ def register(app):
         U.set_auto(ref, on)
         log_action(current_user, "updates_auto", target=row["name"], detail="%s %s" % (ref, "on" if on else "off"))
         U.forget_counts()
-        return jsonify({"success": True, "auto": on, "note": "" if on else i18n.tr(U.S_AUTO_OFF_NOTE)})
+        note = "" if on else i18n.tr(_ug.S_GAME_OFF_NOTE if ref.startswith("game:") else U.S_AUTO_OFF_NOTE)
+        return jsonify({"success": True, "auto": on, "note": note})
 
     @app.route("/api/updates/safe", methods=["POST"])
     @login_required
