@@ -985,3 +985,5 @@ df15f1a2 Each update on the Updates page says what it is and which version it mo
 265b7271 Site Health sees the page cache on sites made before it could.
 bc2e25ea Settings are shown open, never tucked away.
 27e8857c Websites can live in a folder of a domain.
+8ad0882f Database passwords are hidden until you press Show, and Reset password keeps the site working.
+e0a99f98 Reset a website app's admin password from the panel.

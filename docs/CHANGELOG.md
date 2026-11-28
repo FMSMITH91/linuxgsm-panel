@@ -37,6 +37,8 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Websites can live in a folder of a domain.** Add a folder such as /forums to a domain you already have,
   and install WordPress, phpBB, Drupal, MyBB, SMF or your own site there. A subdomain (forums.example.com)
   stays the safer choice, because browsers keep its sign-ins apart; the page says so beside the option.
+- **Reset a website app's admin password from the panel.** A WordPress site's Overview resets an
+  administrator's password, and can set its email so WordPress's own "Lost your password?" works again.
 
 ### Changed
 
@@ -49,6 +51,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Settings are shown open, never tucked away.** Every section that holds a setting now starts open, across
   the panel; if you close one, your browser remembers it. A setting that does not apply to a site shows greyed
   with the reason, and a website's Overview reads like "WordPress 7.1.5 · PHP 8.4".
+- **Database passwords are hidden until you press Show, and Reset password keeps the site working.** Stored
+  passwords show as dots with Show and Copy, and hide again by themselves. Resetting the database password of
+  an app the panel installed gives the app's settings the new password in the same step, and puts the old one
+  back if the site cannot use it.
 
 ### Fixed
 
