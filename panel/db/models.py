@@ -2016,6 +2016,9 @@ _LIGHT_MIGRATIONS = {
     ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
     # The defaults on upgrade (blocking on): websites_guard.settings fills every key an empty object lacks.
     ("website_proxy", "guard"): "ALTER TABLE website_proxy ADD COLUMN guard TEXT DEFAULT '{}'",
+    # Empty on upgrade: every address was a whole domain before folders. The table is then rebuilt once without its
+    # one-site-per-domain UNIQUE (_free_shared_domains).
+    ("website_domain", "path"): "ALTER TABLE website_domain ADD COLUMN path VARCHAR(64) DEFAULT '' NOT NULL",
 }
 
 
@@ -2084,6 +2087,7 @@ def _run_light_migrations():
     _unzone_audit_ips()                 # commits its own rewrite, for the same reason
     _run_data_migrations()              # ...and so does each data migration
     _give_keyed_tables_autoincrement()
+    _free_shared_domains()
     _create_declared_indexes(existing)
     db.session.commit()
 
@@ -2267,6 +2271,33 @@ def _give_keyed_tables_autoincrement():
     return rebuild_for_autoincrement(db.engine, db.metadata,
                                      [m.__table__ for m in _AUTOINCREMENT_MODELS],
                                      _ID_REFS_WITHOUT_FK)
+
+
+def domain_unique_alone(conn, name):
+    """Whether table `name` still has a UNIQUE index on its `domain` column alone (one site per domain, before folders)."""
+    for row in conn.exec_driver_sql("PRAGMA index_list(%s)" % name).fetchall():
+        if not row[2]:
+            continue
+        cols = [r[2] for r in conn.exec_driver_sql("PRAGMA index_info(\"%s\")" % row[1].replace('"', '""')).fetchall()]
+        if cols == ["domain"]:
+            return True
+    return False
+
+
+def _free_shared_domains():
+    """Rebuild website_domain ONCE without the UNIQUE on `domain` alone, so sites can share a domain in folders.
+
+    SQLite cannot drop a constraint, so the table is copied and created again from the model, whose UNIQUE is on
+    (domain, path) (panel/db/id_sequence.py: one transaction, the rows and their ids kept). After the column ALTERs,
+    so `path` is there to copy. A rebuild that fails leaves the table as it was: the panel runs on, a folder on a
+    domain another site holds is refused by the old constraint, and the next start tries again.
+    """
+    from panel.db.id_sequence import rebuild_one
+    try:
+        if rebuild_one(db.engine, WebsiteDomain.__table__, needs=domain_unique_alone):
+            _log.info("website_domain rebuilt: a domain may now be shared by sites in folders")
+    except Exception:
+        _log.warning("could not rebuild website_domain for folders; the next start tries again", exc_info=True)
 
 
 def _backfill_audit_object_ids():

@@ -224,7 +224,7 @@ def site_json(site, admin=False):
     dom = site.primary_domain
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state,
            "state_reason": site.state_reason or "", "enabled": bool(site.enabled),
-           "domain": dom.domain if dom else "", "cert_state": dom.cert_state if dom else "",
+           "domain": dom.address if dom else "", "cert_state": dom.cert_state if dom else "",
            "php_version": site.php_version or "", "runtime": site.runtime or "", "app": site.app_recipe or ""}
     if admin:
         out.update({k: getattr(site, k) for k in LIMITS})
@@ -683,7 +683,7 @@ def _unserved(site):
     """The site's domains the web proxy would not serve, each with its DNS state ("x.org (mismatch)")."""
     from panel.services import websites_proxy as _wp
     served = set(_wp.site_domains(site, _exposure(site)))
-    return ["%s (%s)" % (d.domain, d.dns_state or "unchecked") for d in site.domains or [] if d.domain not in served]
+    return ["%s (%s)" % (d.address, d.dns_state or "unchecked") for d in site.domains or [] if d.address not in served]
 
 
 def online_refusal(site):

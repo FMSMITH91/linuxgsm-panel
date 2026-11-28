@@ -1,0 +1,19 @@
+{
+  "Add a folder on a domain you already have": "Ajouter un dossier sur un domaine que vous avez déjà",
+  "Folder": "Dossier",
+  "Add folder": "Ajouter le dossier",
+  "OWASP recommends a separate subdomain for each app (forums.example.org), so browsers keep each app's sign-ins and data apart. A folder shares its domain with the other apps on it.": "L'OWASP recommande un sous-domaine distinct pour chaque application (forums.example.org), afin que les navigateurs gardent séparées les connexions et les données de chacune. Un dossier partage son domaine avec les autres applications qui s'y trouvent.",
+  "Add a domain to one of your websites on this host first.": "Ajoutez d'abord un domaine à l'un de vos sites web sur cet hôte.",
+  "In a folder of a domain one of your websites has: type the folder after the domain, like example.org/forums. OWASP recommends a separate subdomain for each app instead (forums.example.org), so browsers keep each app's sign-ins and data apart.": "Dans un dossier d'un domaine qu'a déjà l'un de vos sites web : saisissez le dossier après le domaine, comme example.org/forums. L'OWASP recommande plutôt un sous-domaine distinct pour chaque application (forums.example.org), afin que les navigateurs gardent séparées les connexions et les données de chacune.",
+  "That address is already used by a website.": "Cette adresse est déjà utilisée par un site web.",
+  "Add the domain to one of your websites first: a folder goes on a domain one of your websites has.": "Ajoutez d'abord le domaine à l'un de vos sites web : un dossier se place sur un domaine qu'a déjà l'un de vos sites web.",
+  "That domain is served by a website on another host. Sites in folders of a domain share one host.": "Ce domaine est servi par un site web d'un autre hôte. Les sites dans des dossiers d'un domaine partagent un même hôte.",
+  "Another website on {domain} is in {folder}: a folder may not hold, or be inside, another website's folder.": "Un autre site web de {domain} est dans {folder} : un dossier ne peut ni contenir le dossier d'un autre site web, ni se trouver à l'intérieur.",
+  "Every address of a website is in the same folder. This website's addresses are at {where}.": "Toutes les adresses d'un site web sont dans le même dossier. Les adresses de ce site web sont à {where}.",
+  "This app keeps the address it was installed with in its own settings, so it does not move into a folder. Choose the folder when you install an app.": "Cette application garde dans ses propres réglages l'adresse avec laquelle elle a été installée : elle ne se déplace donc pas dans un dossier. Choisissez le dossier lors de l'installation d'une application.",
+  "the root of their domains": "la racine de leurs domaines",
+  "Shares {domain} with your other apps: browsers do not keep their sign-ins apart. A subdomain ({sub}) does.": "Partage {domain} avec vos autres applications : les navigateurs ne gardent pas leurs connexions séparées. Un sous-domaine ({sub}) le fait.",
+  "A folder is lowercase letters, digits, - and _ after the domain and a /, like example.org/forums, at most 64 characters.": "Un dossier se compose de lettres minuscules, de chiffres, de - et de _ après le domaine et une /, comme example.org/forums, en 64 caractères au plus.",
+  "Type the folder the website lives in, like forums.": "Saisissez le dossier où se trouve le site web, comme forums.",
+  "The address was added, but the website's own server could not be set up for the folder: {why}": "L'adresse a été ajoutée, mais le serveur propre du site web n'a pas pu être préparé pour le dossier : {why}"
+}

@@ -72,9 +72,11 @@ _PEM = r"-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}-----END CERTIFI
 STEP_TYPES = ("download-verify-unpack", "create-database", "render-config", "run-in-container",
               "set-permissions", "drive-web-installer", "verify-install")
 RECIPE_KINDS = ("php", "wordpress", "app")
-# Values a recipe may name in braces. SECRETS are never put on a command line or in a URL.
+# Values a recipe may name in braces. SECRETS are never put on a command line or in a URL. base_path and cookie_path
+# are the site's folder ("/forums", "/forums/"; "/" at a domain's root: websites_recipes.values_for).
 PLACEHOLDERS = ("db_name", "db_user", "db_password", "db_host", "db_host_name", "db_port", "site_name",
-                "site_url", "domain", "admin_user", "admin_email", "admin_password", "salt", "trusted_hosts")
+                "site_url", "domain", "admin_user", "admin_email", "admin_password", "salt", "trusted_hosts",
+                "base_path", "cookie_path")
 SECRETS = ("db_password", "admin_password", "salt")
 _PH_RE = re.compile(r"\{([a-z_]{1,24})\}")
 _REL = r"(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63})(?:/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}){0,5}"

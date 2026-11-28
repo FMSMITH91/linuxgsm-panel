@@ -49,18 +49,23 @@ from sqlalchemy.exc import IntegrityError
 from panel.core import i18n
 from panel.core.clock import utcnow
 from panel.core.config import decrypt_secret, encrypt_secret, load_config
-from panel.core.validation import website_domain
+from panel.core.validation import website_address, website_domain, website_folder
 from panel.db.models import Website, WebsiteDomain, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
 from panel.services import tls_own
 from panel.services import website_certs as _wcert
 from panel.services import website_dns as _dns
+from panel.services import website_folders as _wf
 from panel.services import websites_access as _wa
 from panel.services import websites_catalog as _wcat
 
 S_BAD = "That is not a domain a public website can use: letters, digits, hyphens and dots, like www.example.org."
 S_TAKEN = "That domain is already used by a website."
+S_BAD_FOLDER = ("A folder is lowercase letters, digits, - and _ after the domain and a /, like example.org/forums, "
+                "at most 64 characters.")
+S_FOLDER_NEEDED = "Type the folder the website lives in, like forums."
+S_MOVED_FAILED = "The address was added, but the website's own server could not be set up for the folder: {why}"
 S_PANEL = "That is the panel's own address, which is never served as a website."
 S_NO_SUCH = "No such domain on this website."
 # The domain's label already says "browsers do not trust it" (WS.CERT): the warning under it says what to do.
@@ -228,25 +233,46 @@ def cert_note(row, now=None):
     return i18n.Sentence(S_CERT_SOON, days=left.days) if left.days < CERT_SOON_DAYS else ""
 
 
-def domain_refusal(site, text):
-    """(clean domain, None) when `text` may be added to `site`, else (None, (status, sentence))."""
-    clean = website_domain(text)
-    if clean is None:
-        return None, (400, S_BAD)
+def _address(text, folder=None):
+    """((domain, folder), None) of the typed address, `folder` (when given) as its folder; else (None, the refusal)."""
+    got = website_address(text)
+    if got is None:
+        head = text.strip().partition("/")[0] if isinstance(text, str) else None
+        return None, (400, S_BAD_FOLDER if website_domain(head) is not None else S_BAD)
+    clean, path = got
+    if folder is not None and not path:
+        path = website_folder(folder)
+        if not path:
+            return None, (400, S_BAD_FOLDER if path is None else S_FOLDER_NEEDED)
+    return (clean, path), None
+
+
+def domain_refusal(site, text, folder=None):
+    """((domain, folder), None) when address `text` may be added to `site`, else (None, (status, sentence)).
+
+    `text` is a domain, or a domain and its folder (example.org/forums); `folder`, from the Domains tab's folder
+    form, is the folder when `text` names none ("" there is refused: that form adds a folder). Who may put a site
+    in a folder of which domain is website_folders.refusal's question.
+    """
+    got, refused = _address(text, folder)
+    if refused:
+        return None, refused
+    clean, path = got
     own = website_domain(str(load_config().get("site_domain") or "").split(":", 1)[0])
     if own and clean == own:
         return None, (409, S_PANEL)
-    if WebsiteDomain.query.filter_by(domain=clean).first() is not None:
-        return None, (409, S_TAKEN)
+    refused = _wf.refusal(current_user, site, clean, path, _w.manage_perm)
+    if refused:
+        return None, refused
     quota = _wa.domain_quota_refusal(site)
     if quota:
         return None, (429, quota)
-    return clean, None
+    return got, None
 
 
-def _store(site, clean):
-    """The new domain row (primary when it is the site's first), or None when another site took it meanwhile."""
-    row = WebsiteDomain(website_id=site.id, domain=clean, is_primary=not site.domains,
+def _store(site, clean, path=""):
+    """The new address row (primary when it is the site's first), or None when another site took it meanwhile."""
+    row = WebsiteDomain(website_id=site.id, domain=clean, path=path, is_primary=not site.domains,
                         created_by=(current_user.username or "")[:80])
     db.session.add(row)
     try:
@@ -270,14 +296,14 @@ def _site_check(site, name):
 
 
 def add_first(site, text):
-    """Add the add form's domain to a new site: None when added, else the sentence why not."""
-    clean, refused = domain_refusal(site, text)
+    """Add the add form's address (a domain, or domain/folder) to a new site: None when added, else the sentence why not."""
+    got, refused = domain_refusal(site, text)
     if refused:
         return refused[1]
-    row = _store(site, clean)
+    row = _store(site, *got)
     if row is None:
         return S_TAKEN
-    _w.audit(site, "website_domain_add", "added domain %s" % clean)
+    _w.audit(site, "website_domain_add", "added domain %s" % row.address)
     _check(site, row)         # its DNS at once, so it is verified (and served once online) without a Check again
     return None
 
@@ -301,7 +327,8 @@ def _check(site, row):
     if newly and site.enabled:
         ok, why = _w.reconcile_proxy(site.remote)
         said = S_SERVED_NOW if ok else why
-    return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts, "message": i18n.tr(said)}
+    return {"domain": row.domain, "address": row.address, "dns_state": state, "answers": addrs, "host": hosts,
+            "message": i18n.tr(said)}
 
 
 def _row(site, form):
@@ -324,6 +351,7 @@ def domain_json(site, row, tunnel=None):
     """
     tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
     return {**_cert_part(row, tunnel), **_cert_json(row, tunnel), "id": row.id, "domain": row.domain,
+            "path": row.path or "", "address": row.address, "shared_note": _wf.shared_note(row),
             "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked", "cdn_name": _cdn_name(row),
             "cert_error": "" if tunnel else _error_text(row),
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
@@ -609,7 +637,35 @@ def set_cert(site, row, form):
 
 def _primary_name(site):
     dom = site.primary_domain
-    return dom.domain if dom is not None else ""
+    return dom.address if dom is not None else ""
+
+
+def _move_into(site, moving):
+    """Write the site's own server again for its new folder when the address moved it into one: "" or why not.
+
+    A running site restarts with it; a stopped one has its files written and stays stopped.
+    """
+    if not moving:
+        return ""
+    ok, said = _w.host_call(_sw.install, site.remote, site, _w.site_db(site), site.state == "running")
+    return "" if ok else i18n.tr(S_MOVED_FAILED, why=i18n.tr(said))
+
+
+def _add(site, form):
+    """POST .../domains/add's work: a domain, or (with `folder`) a folder of a domain the user's sites hold."""
+    folder = form.get("folder") if "folder" in form else None
+    got, refused = domain_refusal(site, _w.field(form, "domain"), folder if folder is None or isinstance(folder, str) else "")
+    if refused:
+        _w.audit(site, "website_domain_add", "refused domain: %s" % i18n.tr(refused[1]), False)
+        return _w.say(*refused)
+    moving = _wf.moves(site, got[1])
+    row = _store(site, *got)
+    if row is None:
+        return _w.say(409, S_TAKEN)
+    _w.audit(site, "website_domain_add", "added domain %s" % row.address)
+    moved = _move_into(site, moving)
+    got = _check(site, row)
+    return jsonify(dict(got, success=True, moved_note=moved))
 
 
 def _wp_address(site, row):
@@ -620,10 +676,10 @@ def _wp_address(site, row):
     """
     if site.app_recipe != "wordpress":
         return None
-    ok, why = _w.host_call(_sw.wp_set_address, site.remote, site, row.domain)
+    ok, why = _w.host_call(_sw.wp_set_address, site.remote, site, row.address)
     if ok:
-        return True, i18n.Sentence(S_WP_ADDRESS_SET, domain=row.domain)
-    return False, i18n.Sentence(S_WP_ADDRESS_FAILED, domain=row.domain, old=_primary_name(site), why=i18n.tr(why))
+        return True, i18n.Sentence(S_WP_ADDRESS_SET, domain=row.address)
+    return False, i18n.Sentence(S_WP_ADDRESS_FAILED, domain=row.address, old=_primary_name(site), why=i18n.tr(why))
 
 
 def register(app):
@@ -632,15 +688,7 @@ def register(app):
     @login_required
     def website_domain_add(site_id):
         site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
-        clean, refused = domain_refusal(site, _w.field(_w.body(), "domain"))
-        if refused:
-            _w.audit(site, "website_domain_add", "refused domain: %s" % i18n.tr(refused[1]), False)
-            return _w.say(*refused)
-        row = _store(site, clean)
-        if row is None:
-            return _w.say(409, S_TAKEN)
-        _w.audit(site, "website_domain_add", "added domain %s" % clean)
-        return jsonify(dict(_check(site, row), success=True))
+        return _add(site, _w.body())
 
     @app.route("/websites/<int:site_id>/domains/remove", methods=["POST"])
     @login_required
@@ -649,10 +697,10 @@ def register(app):
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
-        name, was_primary, was_online = row.domain, row.is_primary, site.enabled
+        name, was_primary, was_online = row.address, row.is_primary, site.enabled
         db.session.delete(row)
         db.session.flush()
-        rest = [d for d in site.domains if d.domain != name]
+        rest = [d for d in site.domains if d.address != name]
         if was_primary and rest:
             rest[0].is_primary = True
         if not rest:

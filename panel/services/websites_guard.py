@@ -221,7 +221,7 @@ def enabled(proxy):
 
 
 # ── the proxy's lines ────────────────────────────────────────────────────────────────────────────
-def _security_log(name):
+def security_log(name):
     """The block's security logger, mapped to the block's names (never `no_hostname`).
 
     The proxy decides whether a request is logged at all before any handler runs, by its Host: a host no logger is
@@ -239,43 +239,55 @@ def _security_log(name):
                                         "size", "duration")] + ["\t\t}", "\t}"]
 
 
-def _watch_matchers(deny_paths):
-    lines = ["\t@lgsmlogin {", "\t\tmethod POST", "\t\tpath %s" % " ".join(LOGIN_PATHS), "\t}"]
+def _under(prefix, paths):
+    """`paths` under the site's folder `prefix` ("" at a domain's root): the paths the proxy sees for that site."""
+    return " ".join(prefix + p if p.startswith("/") else p for p in paths)
+
+
+def _watch_matchers(deny_paths, prefix=""):
+    lines = ["\t@lgsmlogin {", "\t\tmethod POST", "\t\tpath %s" % _under(prefix, LOGIN_PATHS), "\t}"]
     for i, (path, query) in enumerate(LOGIN_QUERIES):
-        lines += ["\t@lgsmlogin%d {" % i, "\t\tmethod POST", "\t\tpath %s" % path, "\t\tquery %s" % query, "\t}"]
-    lines.append("\t@lgsmscan path %s" % " ".join(list(SCAN_PATHS) + list(deny_paths)))
+        lines += ["\t@lgsmlogin%d {" % i, "\t\tmethod POST", "\t\tpath %s" % _under(prefix, [path]),
+                  "\t\tquery %s" % query, "\t}"]
+    lines.append("\t@lgsmscan path %s" % _under(prefix, list(SCAN_PATHS) + list(deny_paths)))
     return lines
 
 
-def _quiet_matcher(deny_paths, access):
+def _quiet_matcher(deny_paths, access, prefix=""):
     """Every request the guard does not watch: kept out of the security log the block's names map to.
 
     With the site's access log off it is skipped by every logger; on (`access`, its logger's name), it is written by
     that logger alone.
     """
-    lines = ["\t@lgsmquiet {", "\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % " ".join(LOGIN_PATHS), "\t\t}"]
+    lines = ["\t@lgsmquiet {", "\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % _under(prefix, LOGIN_PATHS), "\t\t}"]
     for path, query in LOGIN_QUERIES:
-        lines += ["\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % path, "\t\t\tquery %s" % query, "\t\t}"]
-    return lines + ["\t\tnot path %s" % " ".join(list(SCAN_PATHS) + list(deny_paths)), "\t}",
+        lines += ["\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % _under(prefix, [path]), "\t\t\tquery %s" % query,
+                  "\t\t}"]
+    return lines + ["\t\tnot path %s" % _under(prefix, list(SCAN_PATHS) + list(deny_paths)), "\t}",
                     "\tlog_name @lgsmquiet %s" % access if access else "\tlog_skip @lgsmquiet"]
 
 
-def guard_lines(site_id, block, deny_paths, access_log):
+def guard_lines(site_id, block, deny_paths, access_log, prefix="", logger=True):
     """A site block's guard: the deny list's 403, the watched requests to the security log, tagged.
 
-    `block` numbers the site's blocks (one per certificate source), so each logger name is its own. The security
-    logger is mapped to the block's names (_security_log). With the site's access log on, its logger is named too
-    (access_name): a watched request goes to both, every other request to the access logger alone; with it off,
-    every other request is skipped by every logger.
+    `block` numbers the site's blocks (one per certificate source, and one per domain it has a folder of), so each
+    logger name is its own. The security logger is mapped to the block's names (security_log); `logger` False
+    leaves its definition to the caller (a folder block defines its sites' loggers on the block). With the site's
+    access log on, its logger is named too (access_name): a watched request goes to both, every other request to
+    the access logger alone; with it off, every other request is skipped by every logger. A site in a folder
+    (`prefix`, "/forums") is watched on its folder's paths, and each watched request carries the folder
+    (`lgsm_folder`), so the helper records the ban against domain/folder: the site the visitor was refused on.
     """
     sec = "lgsmsec%d_%d" % (site_id, block)
     names = sec + (" " + access_name(site_id, block) if access_log else "")
     lines = ["\t@lgsmdeny file {", "\t\troot %s" % DENY_DIR, "\t\ttry_files {client_ip}", "\t}", "\terror @lgsmdeny 403"]
-    lines += _watch_matchers(deny_paths)
+    lines += _watch_matchers(deny_paths, prefix)
     for matcher, tag in (("lgsmlogin", "login"), ("lgsmlogin0", "login"), ("lgsmlogin1", "login"), ("lgsmscan", "scan")):
         lines += ["\tlog_name @%s %s" % (matcher, names), "\tlog_append @%s lgsm %s" % (matcher, tag)]
-    lines += _quiet_matcher(deny_paths, access_name(site_id, block) if access_log else None)
-    return lines + _security_log(sec)
+        if prefix:
+            lines.append("\tlog_append @%s lgsm_folder %s" % (matcher, prefix))
+    lines += _quiet_matcher(deny_paths, access_name(site_id, block) if access_log else None, prefix)
+    return lines + (security_log(sec) if logger else [])
 
 
 def access_name(site_id, block):

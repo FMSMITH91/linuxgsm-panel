@@ -1,8 +1,8 @@
 """Blocked visitors: a site's list and its Unban, the host's guard settings, and the audit of every ban.
 
 A site's list (GET /websites/<id>/blocked) is the host's deny list (services/websites_guard: fail2ban's bans kept
-inside the web proxy) narrowed to the addresses banned while asking for one of that site's names: their address,
-why (the jail), since when and until when. The ban holds for every site on the host (a visitor that tried one
+inside the web proxy) narrowed to the addresses banned while asking for one of that site's addresses (a site in a
+folder by its domain and folder): their address, why (the jail), since when and until when. The ban holds for every site on the host (a visitor that tried one
 site's sign-in is kept from all of them), and the page says so. Unban (POST /websites/<id>/blocked/unban) lifts
 one of those addresses: fail2ban forgets it (and its firewall ban in public mode) and the proxy's list drops it,
 audited. Both need the site's manage permission (site_for, 404 otherwise), as the other per-site routes.
@@ -58,9 +58,11 @@ def _set_cursor(remote_id, seq):
 
 
 def _site_of(remote, host):
-    """The site on `remote` that serves `host` (one of its domains), or None."""
+    """The site on `remote` at address `host` (a domain, or domain/folder for a site in a folder), or None."""
+    domain, slash, folder = host.partition("/")
     row = (WebsiteDomain.query.join(Website, WebsiteDomain.website_id == Website.id)
-           .filter(Website.remote_id == remote.id, WebsiteDomain.domain == host).first())
+           .filter(Website.remote_id == remote.id, WebsiteDomain.domain == domain,
+                   WebsiteDomain.path == (slash + folder if slash else "")).first())
     return row.website if row is not None else None
 
 
@@ -134,8 +136,9 @@ def tick(app):
 
 
 def _entry_json(e):
+    """One ban as the list shows it; `site` names the address it was made on when that is a folder of a domain."""
     return {"ip": e["ip"], "jail": e["jail"], "reason": i18n.tr(_wg.JAIL_LABELS.get(e["jail"], e["jail"])),
-            "since": _when(e["at"]), "until": _when(e["until"])}
+            "since": _when(e["at"]), "until": _when(e["until"]), "site": e["host"] if "/" in e["host"] else ""}
 
 
 def _listed(entries, ip):
@@ -144,8 +147,11 @@ def _listed(entries, ip):
 
 
 def site_entries(site, entries):
-    """The entries of the host's list banned while asking for one of `site`'s names."""
-    names = {d.domain for d in site.domains}
+    """The entries of the host's list banned while asking for one of `site`'s addresses (domain/folder in a folder).
+
+    A ban the helper recorded before folders names the domain alone: it is the site's at that domain's root.
+    """
+    names = {d.address for d in site.domains}
     return [e for e in entries if e["host"] in names]
 
 

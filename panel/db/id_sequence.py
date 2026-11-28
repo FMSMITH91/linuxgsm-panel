@@ -83,9 +83,12 @@ def _count(conn, table):
     return conn.execute(sa.select(sa.func.count()).select_from(table)).scalar()
 
 
-def _rebuild_in(conn, table, refs):
-    """Rebuild `table` on `conn`, inside the caller's transaction. False when it is left alone."""
-    if not lacks_autoincrement(conn, table.name):
+def _rebuild_in(conn, table, refs, needs=None):
+    """Rebuild `table` on `conn`, inside the caller's transaction. False when it is left alone.
+
+    `needs(conn, name)` says whether the table still needs it (lacks_autoincrement by default).
+    """
+    if not (needs or lacks_autoincrement)(conn, table.name):
         return False
     cols = _copy_columns(conn, table)
     if cols is None:
@@ -111,14 +114,17 @@ def _rebuild_in(conn, table, refs):
     return True
 
 
-def rebuild_one(engine, table, refs=()):
-    """Give `table` AUTOINCREMENT if it lacks it, in one transaction. True when it was rebuilt."""
+def rebuild_one(engine, table, refs=(), needs=None):
+    """Rebuild `table` from its model when `needs` says so (no AUTOINCREMENT by default), in one transaction.
+
+    True when it was rebuilt. The same copy serves any change ALTER TABLE cannot make, a constraint removed among them.
+    """
     with engine.connect() as conn:
         # One transaction for the whole copy, so a failure anywhere leaves the table as it was.
         # pysqlite would open its own only before the first INSERT, after the CREATE of the copy.
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         try:
-            done = _rebuild_in(conn, table, refs)
+            done = _rebuild_in(conn, table, refs, needs)
         except Exception:
             conn.rollback()
             raise

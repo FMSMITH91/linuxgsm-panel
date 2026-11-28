@@ -303,6 +303,48 @@ WordPress's own address (WordPress Address and Site Address, its home and siteur
 domain, with WordPress's own code in the site's running container. If that cannot be done (the site is
 stopped, say), the primary domain stays as it was and the answer says why.
 
+### A website in a folder of a domain
+
+One domain can hold several websites: one at its root (`example.org`) and others each in a folder
+(`example.org/forums`, `example.org/wiki`). On a site's **Domains** tab, **Add a folder on a domain you
+already have** lists the domains your websites already have on the same host; pick one and type the folder.
+In the add dialog (Add a website, Install an app) type the folder after the domain, `example.org/forums`.
+
+- A folder is lowercase letters, digits, `-` and `_`, one or more parts (`/docs/v2`), at most 64
+  characters; no dots, so no `..` and no file name.
+- A folder never holds, or sits inside, another website's folder on the same domain, and every address of
+  one website is in the same folder (its app is told one base path).
+- The domain must already be on one of **your** websites on the same host: nobody can put a site under a
+  domain they do not run.
+- Overview, the Websites list and **Open site** show and open the full address.
+
+**OWASP recommends a separate subdomain for each app instead** (`forums.example.org`). Websites in folders
+of one domain are one origin to a browser: a script one of them serves can read the others' pages and
+stored data and set cookies for their folders, so a flaw in one app can reach another app's sign-ins. A
+subdomain is a separate origin and does not have that problem. Each folder address on the Domains tab says
+so. The panel still sets each app's cookie path to its folder, which keeps their cookies from colliding,
+but a cookie path is not a security boundary.
+
+How it works:
+
+- The web proxy gives the domain one block with a route per folder, the longest first, then the site at
+  the root (or "not found" when no site holds the root). It works the same in Public, Restricted and Tunnel
+  mode, and the certificate is the domain's (the root site's, when there is one).
+- The folder stays in the path: each site's own server maps it to its files (Apache for PHP sites, nginx
+  for static sites), so links, redirects and cookies name the folder the visitor asked for. A Node.js app
+  is sent the whole path: set its base path to the folder.
+- The apps are installed for the folder: WordPress's address (WordPress Address and Site Address, from
+  which it sets its cookie paths), phpBB's script path and cookie path, MyBB's board URL and cookie path,
+  Simple Machines Forum's board URL with its cookies on the board's path, and Drupal, which reads its base
+  path from each request.
+- A site's rules, the page cache's skipped paths and Blocked visitors' watched sign-in and scanner paths are
+  the folder's. A ban still holds for every site on the host; a site's Blocked visitors list names the folder
+  address the visitor was refused on. **Purge cache** on a site in a folder empties the whole domain's cache
+  (the other sites refill theirs on the next visit).
+- A static, PHP or Node.js site with no address yet moves into a folder when you add the folder: its own
+  server is written again (a running site restarts). A one-click app keeps the address it was installed with
+  in its own settings, so its folder is chosen when it is installed.
+
 ### Your own certificate
 
 A website has one **Certificate** button, at the top of its Domains tab: **Automatic (Let's Encrypt)**,

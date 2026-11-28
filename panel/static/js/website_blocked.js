@@ -1,5 +1,5 @@
 // A website's Blocked visitors (templates/_website_rules.html): GET /websites/<id>/blocked lists the addresses the
-// host blocks that attacked this site ({entries: [{ip, jail, reason, since, until}], count, others, guard: {enabled,
+// host blocks that attacked this site ({entries: [{ip, jail, reason, since, until, site}], count, others, guard: {enabled,
 // fail2ban}}; `others` counts the host's other blocked addresses, kept off this site too); POST
 // /websites/<id>/blocked/unban {ip} lifts one, and its row goes at once. Loaded when the Rules tab opens (website_site.js).
 // The reason is the server's sentence, already in the viewer's language; an address is the visitor's, as text.
@@ -15,6 +15,8 @@
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     top.appendChild(WS.raw('span', 'font-monospace text-break', String(e.ip || '')));
     top.appendChild(WS.raw('span', 'text-secondary', String(e.reason || '')));
+    // A ban made on a site in a folder names that address (example.org/forums).
+    if (e.site) top.appendChild(WS.raw('span', 'small text-secondary text-break font-monospace', String(e.site)));
     li.appendChild(top);
     var span = when(String(e.since || ''), String(e.until || ''));
     var line = WS.node('div', 'd-flex flex-wrap align-items-center gap-1 small text-secondary');

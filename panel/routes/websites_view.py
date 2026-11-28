@@ -366,7 +366,7 @@ def _last_backup(probe):
 
 def _open_url(site):
     dom = site.primary_domain
-    return "https://%s/" % dom.domain if dom and site.enabled else ""
+    return "https://%s/" % dom.address if dom and site.enabled else ""
 
 
 def _setup_unfinished(site):
@@ -459,8 +459,16 @@ def _manager_parts(out, site):
     out["perf"] = _perf(site)
     out["rules"] = json.loads(site.custom_rules or "[]")
     out["app"] = _app(site) if site.kind == "app" else None
+    out["folder_domains"] = _folder_domains(site)
     if current_user.is_superadmin:
         out["raw_rules"] = site.raw_proxy_snippet or ""
+
+
+def _folder_domains(site):
+    """The domains the Domains tab's folder form offers: those held by sites the viewer manages on this host."""
+    from panel.routes.websites import manage_perm
+    from panel.services import website_folders
+    return website_folders.host_domains(current_user, site, manage_perm)
 
 
 def _failed_logs(site):

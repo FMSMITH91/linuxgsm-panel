@@ -4,8 +4,9 @@
 //      update_available}, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
 //      cpu_pct}, limits: {mem_mb, cpu_milli, pids, disk_mb, max_body_mb, backup_keep}, access_log,
 //      full_egress, customer_note}, install: {state, steps, error, site_url, admin_url},
-//    logs: [last lines when failed], domains: [{id, domain, is_primary, dns_state, cert_state,
-//      cert_not_after, cert_error}], dns: {a: [..], aaaa: [..]}, databases: [{id, name, user}], ...}
+//    logs: [last lines when failed], domains: [{id, domain, path, address, shared_note, is_primary, dns_state,
+//      cert_state, cert_not_after, cert_error}], folder_domains: [..], dns: {a: [..], aaaa: [..]},
+//    databases: [{id, name, user}], ...}
 // The PHP, Performance, Rules and App panels (website_tuning.js) and Files (website_files.js) are fed
 // from here through WS.onSite. Actions POST to /websites/<id>/<verb>; the page decides nothing the
 // server does not check again (websites_access.site_for on every route).
@@ -218,10 +219,12 @@
   function domainRow(dm) {
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
-    top.appendChild(WS.raw('strong', 'text-break', dm.domain));
+    top.appendChild(WS.raw('strong', 'text-break', dm.address || dm.domain));
     if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
     li.appendChild(domainInfo(dm));
+    // A site in a folder shares its domain's origin with the other sites on it (services/website_folders).
+    if (dm.shared_note) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.shared_note));
     domainNotes(li, dm);
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
@@ -285,6 +288,7 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
+    renderFolderForm(d.folder_domains || []);
     renderSiteCert(d.site_cert);
     renderRecords(doms, d.dns || {}, d.tunnel);
   }
@@ -313,8 +317,11 @@
     var body = WS.clear(WS.el('wd-records'));
     if (tunnel) { WS.show('wd-dns', false); return; }
     var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
-    var rows = [];
+    var rows = [], seen = {};
+    // A folder's record is its domain's: each domain once.
     want.forEach(function (x) {
+      if (seen[x.domain]) return;
+      seen[x.domain] = true;
       (dns.a || []).forEach(function (ip) { rows.push(['A', x.domain, ip]); });
       (dns.aaaa || []).forEach(function (ip) { rows.push(['AAAA', x.domain, ip]); });
     });
@@ -327,6 +334,36 @@
       body.appendChild(tr);
     });
   }
+  // The folder form: the domains the viewer's sites hold on this host, or greyed with the reason when there are none
+  // (never hidden: it is an action the page offers).
+  function renderFolderForm(doms) {
+    var sel = WS.el('wd-folder-domain');
+    if (!sel) return;
+    var keep = sel.value;
+    WS.clear(sel);
+    doms.forEach(function (name) {
+      var o = document.createElement('option');
+      o.value = String(name);
+      o.textContent = String(name);
+      sel.appendChild(o);
+    });
+    if (keep && doms.indexOf(keep) >= 0) sel.value = keep;
+    var none = !doms.length;
+    ['wd-folder-domain', 'wd-folder-path', 'wd-folder-add'].forEach(function (id) { var e = WS.el(id); if (e) e.disabled = none; });
+    WS.show('wd-folder-none', none);
+  }
+  window.wsFolderAdd = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var inp = WS.el('wd-folder-path'), sel = WS.el('wd-folder-domain');
+    WS.say('wd-msg', WS.T('Adding…'));
+    WS.post(WS.R.act(ID, 'domains/add'), {domain: sel.value, folder: inp.value.trim()}).then(function (d) {
+      if (WS.done(d, 'wd-msg')) {
+        inp.value = '';
+        if (d.moved_note) WS.say('wd-msg', d.moved_note, 'err');
+        WS.reload();
+      }
+    });
+  };
   window.wsDomainAdd = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var inp = WS.el('wd-domain');
