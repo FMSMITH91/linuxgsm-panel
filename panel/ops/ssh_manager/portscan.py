@@ -33,6 +33,7 @@ class Listening(set):
     """
 
     def __init__(self, ports=(), owners=None):
+        """`ports` as the set's members; `owners` ({port: names}) copied, so a scan's copy never shares it."""
         super().__init__(ports)
         self.owners = {p: set(o) for p, o in (owners or {}).items()}
 
@@ -43,6 +44,7 @@ class Listening(set):
     __hash__ = None              # a set: never hashable
 
     def copy(self):
+        """A copy that keeps who holds each port (set.copy would drop it)."""
         return Listening(self, self.owners)
 
 
