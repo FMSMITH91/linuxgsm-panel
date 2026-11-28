@@ -62,7 +62,7 @@ _STEAMDB_RE = re.compile(r"https://steamdb\.info/app/([0-9]{1,10})/history")
 
 
 def family(game_type):
-    """"steam", "minecraft", "same" (players need the same release) or "own" (LinuxGSM's own updater)."""
+    """Return the update family: "steam", "minecraft", "same" (players need the same release) or "own" (LinuxGSM's updater)."""
     gt = (game_type or "").lower()
     if gt in MINECRAFT:
         return "minecraft"
