@@ -3904,6 +3904,26 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/app-admin/reset": {
+    "endpoint": "website_app_admin_reset",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_app_admin_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/app-admin/users": {
+    "endpoint": "website_app_admins",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_app_admins"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/app/build": {
     "endpoint": "website_app_build",
     "guards": [

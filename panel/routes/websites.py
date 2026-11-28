@@ -907,13 +907,14 @@ def _settings(site, form):
 
 def register(app):
     """The Websites routes: these, and the sibling modules'."""
-    from panel.routes import (databases_sites, websites_apps, websites_backups, websites_customers, websites_domains,
-                              websites_files, websites_guard, websites_proxy, websites_settings, websites_view)
+    from panel.routes import (databases_sites, websites_app_admin, websites_apps, websites_backups, websites_customers,
+                              websites_domains, websites_files, websites_guard, websites_proxy, websites_settings,
+                              websites_view)
     app.jinja_env.globals["websites_nav"] = websites_view.nav_url
     _list_routes(app)
     _add_route(app)
     _run_routes(app)
     _admin_routes(app)
     for mod in (websites_domains, websites_files, websites_backups, websites_settings, websites_apps,
-                websites_customers, websites_proxy, websites_guard, databases_sites):
+                websites_customers, websites_proxy, websites_guard, databases_sites, websites_app_admin):
         mod.register(app)
