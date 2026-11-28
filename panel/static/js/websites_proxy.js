@@ -87,11 +87,14 @@
     if (p.last_error) e.appendChild(WS.raw('span', 'd-block text-danger', p.last_error));
   }
   var MODE_NAME = {public: 'Public', restricted: 'Restricted', tunnel: 'Tunnel'};
+  function modeSummary(p) {
+    var sum = WS.el('wp-mode-summary');
+    if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
+  }
   function renderHost() {
     var p = cur();
     stateLine(p);
-    var sum = WS.el('wp-mode-summary');
-    if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
+    modeSummary(p);
     st.presets = (p.allow_presets || []).slice();
     setMode(p.exposure_mode || 'public');
     renderPresets();
@@ -257,6 +260,13 @@
       WS.post('/websites/proxy/settings', {host_id: st.host, exposure: body}).then(function (d) {
         var tok = WS.el('wp-token');
         if (tok) tok.value = '';
+        // The fold's summary says the mode now in force: a save the host refused to apply (a tunnel token
+        // Cloudflare refused) is still the saved mode, with its ports closed (the answer's `proxy`).
+        if (d && d.proxy) {
+          var p = cur();
+          Object.keys(d.proxy).forEach(function (k) { p[k] = d.proxy[k]; });
+          modeSummary(p);
+        }
         appliedLine(d);
         if (WS.done(d, 'wp-msg') && WS.loadList) WS.loadList();
       });

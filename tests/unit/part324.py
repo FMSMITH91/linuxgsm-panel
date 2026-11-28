@@ -596,6 +596,31 @@ def _s7_outside(su):
        "Confirm", (got.get("asked"), got.get("stillOn")), (1, True))
 
 
+def _s7_proxy_card():
+    from unit.part301 import _LIST301, _list_sa301
+    proxy = {"host_id": 1, "host_name": "h", "installed": True, "version": "2.11.9", "exposure_mode": "restricted",
+             "allow_cidrs": ["198.51.100.0/24"], "allow_presets": [], "tunnel_service": "http://localhost:19080",
+             "guard": {}}
+    saved = dict(proxy, exposure_mode="tunnel", tunnel_token_set=True)
+    got = _node324(_list_sa301, ["websites_common.js", "websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const before = $('wp-mode-summary').textContent;
+  const t = $('wp-mode-tunnel'), r = $('wp-mode-restricted');
+  if (r) r.checked = false;
+  if (t) t.checked = true;
+  $('wp-token').value = 'eyJhIjoiYiJ9';
+  window.wsSaveExposure({preventDefault: function () {}});
+  for (let i = 0; i < 4; i++) await tick();
+  return {before: before, after: $('wp-mode-summary').textContent};
+""", {"/api/websites": dict(_LIST301, proxies=[proxy], options={}),
+      "/websites/proxy/settings": {"success": False, "message": "Cloudflare refused the tunnel's token.",
+                                   "proxy": saved}})
+    eq("web proxy card (js/websites_proxy.js, Tunnel saved with a token the host's apply refused): the exposure fold's "
+       "summary says the mode now in force, not the one before the save",
+       (got.get("before"), got.get("after"), got.get("error")),
+       ("How visitors reach your sites: Restricted", "How visitors reach your sites: Tunnel", None))
+
+
 # ── 8. An apply loads through the admin socket when both sides have it ────────────────────────────
 def _admin_server324(path, got):
     """A unix socket at `path` answering one request 200, its bytes kept in got["req"]."""
@@ -714,6 +739,7 @@ _PAGES324 = (
     _s6_when_line,
     _s6_title,
     _s6_badge,
+    _s7_proxy_card,
 )
 _HOST324 = (
     _s1_until,
