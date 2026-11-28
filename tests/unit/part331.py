@@ -255,10 +255,12 @@ def _s2_tenants(host, root):
         offered_owner = _wf331.host_domains(owner, mine, lambda sid: _auth331.MANAGE_WEBSITE)
     eq("the folder form's domains: only those held by sites the viewer manages on the host",
        (offered, _DOM331 in offered_owner, "lone." + _DOM331 in offered_owner), ([], True, False))
-    eq("folder (refused to someone who manages no site holding the domain; a domain used nowhere gets the same answer)",
+    eq("folder (refused to someone who manages no site holding the domain; a domain used nowhere, and a folder address "
+       "another site already has, get the same answer)",
        (_add331(tenant.id, mine, domain=_DOM331, folder="shop"), _add331(tenant.id, mine, domain="none." + _DOM331,
-                                                                           folder="shop")),
-       ((409, _wf331.S_NOT_YOURS), (409, _wf331.S_NOT_YOURS)))
+                                                                           folder="shop"),
+        _add331(tenant.id, mine, domain=_DOM331 + "/forums")),
+       ((409, _wf331.S_NOT_YOURS), (409, _wf331.S_NOT_YOURS), (409, _wf331.S_NOT_YOURS)))
     eq("folder (control: someone who manages the site at the domain's root adds a folder of it)",
        (_add331(owner.id, mine, domain=_DOM331, folder="shop")[0], _rows331(mine)), (200, [(_DOM331, "/shop")]))
     eq("root (refused to someone who manages none of the folder sites on a domain with no root site)",

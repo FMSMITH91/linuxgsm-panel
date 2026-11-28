@@ -114,6 +114,9 @@ def refusal(user, site, domain, path, perm_of):
     the panel's name and the site's quota are the caller's checks (websites_domains.domain_refusal).
     """
     held = WebsiteDomain.query.filter_by(domain=domain).all()
+    refused = _holder_refusal(user, site, path, held, perm_of) if path else None
+    if refused:
+        return refused      # before "taken": a folder address on a domain the user holds nowhere says nothing more
     if any((r.path or "") == path for r in held):
         return 409, S_TAKEN if path else S_DOMAIN_TAKEN
     if path == "" and not held:
