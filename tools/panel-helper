@@ -3702,6 +3702,7 @@ WEB_GUARD_ACTION_TEXT = """# Written by linuxgsm-panel: a website ban kept insid
 [Definition]
 actionstart =
 actionstop = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>
+actionflush = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>
 actioncheck =
 actionban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-ban <ip> <name> <bantime>
 actionunban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-unban <ip> <name>
@@ -3830,6 +3831,9 @@ def _web_f2b_reload():
     """fail2ban reloaded: "yes", "no", or "absent" when fail2ban is not installed."""
     try:
         rc, _out = _run_quiet([resolve(F2B), "reload"], timeout=60)
+        for jail in restart:
+            if jail in WEB_GUARD_JAILS and rc == 0:
+                rc, _out = _run_quiet([resolve(F2B), "reload", "--restart", "--if-exists", jail], timeout=120)
     except FileNotFoundError:
         return "absent"
     except subprocess.TimeoutExpired:
@@ -4016,13 +4020,23 @@ def _web_deny_remove(ip):
         return False
 
 
+def web_guard_unban_kind(entry, now):
+    """The event an unban of `entry` is: "unban" when its ban time is over, "lift" when it was lifted before (by hand).
+
+    fail2ban unbans an address one by one when its time is up, or when it is told to on the host (unbanip). A stop
+    or a restart of the jail is a flush (the action's actionflush), and the panel's Unblock removes the entry before
+    it asks fail2ban (a "release"), so neither reaches here with the entry still there.
+    """
+    return "unban" if now >= entry["until"] - 5 else "lift"
+
+
 def do_website_guard_unban(args, content):
     """fail2ban's unban: the address's deny list entry goes, when it is that jail's. Prints unban=."""
     ip, jail = args
     entry = _web_deny_entries().get(ip)
     done = entry is not None and entry["jail"] == jail and _web_deny_remove(ip)
     if done:
-        _web_guard_event("unban", ip, jail, entry["host"])
+        _web_guard_event(web_guard_unban_kind(entry, int(time.time())), ip, jail, entry["host"])
     sys.stdout.write("unban=%s\n" % ("yes" if done else "none"))
     return 0
 

@@ -229,7 +229,7 @@ the two limits, the window, the first ban (10 minutes by default, OWASP's exampl
 that grows for an address banned again (on by default, OWASP's exponential backoff), the longest ban (24
 hours by default; OWASP asks for temporary blocks) and addresses never to block. OWASP gives no number for
 a limit or a window; the card shows OWASP's words beside each field, and a note, never a block, when
-blocking or the growing ban is off (OWASP Authentication Cheat Sheet, "Login Throttling"; Credential
+blocking or the growing ban is off, or the first ban is shorter than OWASP's 10 minutes (OWASP Authentication Cheat Sheet, "Login Throttling"; Credential
 Stuffing Prevention Cheat Sheet, "IP Mitigation and Intelligence"). Never blocked, whatever the settings:
 the host's own addresses, the loopback, your tailnet, every CDN preset's networks, the allow list above and
 the panel's login whitelist, so a CDN's own address is never blocked.

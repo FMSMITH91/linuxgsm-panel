@@ -162,6 +162,40 @@ def _line322(ip, tag, host):
 
 
 # ── 3. Deny entries the proxy can read ─────────────────────────────────────────────────────────────
+def _s3_deny_modes():
+    d = _tf322.mkdtemp(prefix="lgsm-unit-p322-deny-")
+    writes = []
+    seams, proxy = _tree322(d, writes, lambda argv: (0, ""))
+    try:
+        _quiet322(_H322._web_guard_apply, dict(_GUARD322), proxy)
+        with open(_H322.WEB_SECURITY_LOG, "a", encoding="utf-8") as fh:
+            fh.write(_line322(_VISITOR322, "login", "p322.example.org") + "\n")
+        del writes[:]
+        ban = _quiet322(_H322.do_website_guard_ban, [_VISITOR322, "lgsm-web-login", "600"], "")
+        banned = [w for w in writes if w[0].startswith("deny")]
+        # An entry an older helper wrote: 0600 root, the proxy cannot read it. The next apply writes it again.
+        old = os.path.join(_H322.WEB_DENY_DIR, _OTHER322)
+        fd = os.open(old, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.write(fd, b"jail=lgsm-web-scan at=100 until=%d host=p322.example.org\n" % (int(_time322.time()) + 600))
+        os.close(fd)
+        del writes[:]
+        _quiet322(_H322._web_guard_apply, dict(_GUARD322), proxy)
+        redone = [w for w in writes if w[0] == os.path.join("deny", _OTHER322)]
+        never = _quiet322(_H322.do_website_guard_ban, ["127.0.0.1", "lgsm-web-login", "600"], "")
+    finally:
+        seams.restore()
+        _shutil322.rmtree(d, ignore_errors=True)
+    entry = os.path.join("deny", _VISITOR322)
+    eq("blocked visitors (helper website-guard-ban): the deny entry is written 0640, root's and the proxy's group "
+       "(the proxy's file matcher, as the proxy's user, matches only an entry it can read: 0600 root let a banned "
+       "visitor through, cached pages and all)", (ban, banned), ((0, "ban=yes\n"), [(entry, 0o640, 0, _PROXY_GID322)]))
+    eq("blocked visitors (helper website-proxy-apply's guard step): an entry an older helper wrote 0600 is written "
+       "again 0640 root:the proxy's group, so a ban from before the update blocks too",
+       redone, [(os.path.join("deny", _OTHER322), 0o640, 0, _PROXY_GID322)])
+    eq("blocked visitors (helper, control): the host's own loopback is never banned, nothing written",
+       never, (1, "ban=refused\n"))
+
+
 # ── 4 and 6. Unblock end to end, and the ways a ban ends ───────────────────────────────────────────
 class _F2b322:
     """fail2ban as the helper's action sees it: unbanip runs the action's own unban (website-guard-unban)."""
@@ -466,7 +500,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir,):
+for _sec322 in (_s1_log_dir, _s3_deny_modes):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():
