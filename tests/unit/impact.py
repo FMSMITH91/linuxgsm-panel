@@ -29,6 +29,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess  # nosec B404 - git with a fixed argv, no shell
 import sys
 
@@ -44,6 +45,10 @@ FULL_PATTERNS = (
     "requirements*.txt", "panel/install/requirements*", ".github/workflows/*", ".github/scripts/*",
     ".github/ci-requirements-checks/*", ".github/coveragerc", "install.sh", "tools/*", "tools/**",
 )
+
+
+# git by its full path (Bandit B607: a bare name is looked up on PATH at every call).
+_GIT = shutil.which("git") or "/usr/bin/git"
 
 
 def full_reason(paths):
@@ -261,7 +266,7 @@ def build_map(records, made, commit):
 def git_changes(root, base):
     """[(status, path, old_path)] between the merge base of `base` and the working tree, untracked files added."""
     def git(*args):
-        return subprocess.run(["git", "-C", root] + list(args), capture_output=True, text=True,  # nosec B603
+        return subprocess.run([_GIT, "-C", root] + list(args), capture_output=True, text=True,  # nosec B603
                               check=True).stdout
     mb = git("merge-base", base, "HEAD").strip()
     out = []
@@ -277,9 +282,9 @@ def changed_since(root, commit, base):
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         return None
     try:
-        mb = subprocess.run(["git", "-C", root, "merge-base", base, "HEAD"], capture_output=True, text=True,  # nosec B603
-                            check=True).stdout.strip()
-        out = subprocess.run(["git", "-C", root, "diff", "--name-only", commit, mb], capture_output=True,  # nosec B603
+        mb = subprocess.run([_GIT, "-C", root, "merge-base", base, "HEAD"],  # nosec B603
+                            capture_output=True, text=True, check=True).stdout.strip()
+        out = subprocess.run([_GIT, "-C", root, "diff", "--name-only", commit, mb], capture_output=True,  # nosec B603
                              text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
