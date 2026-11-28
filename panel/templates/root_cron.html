@@ -80,7 +80,7 @@
     </div>
     {% endfor %}
 
-    <details class="mt-3" id="rc-add"{% if not jobs %} open{% endif %}>
+    <details class="mt-3" id="rc-add" open data-fold="rc-add">
       <summary class="small fw-semibold"><i class="bi bi-plus-lg"></i> Add a job</summary>
       <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="op" value="add">

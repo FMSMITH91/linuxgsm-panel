@@ -1,9 +1,9 @@
 {# Settings -> Schedules (panel/routes/schedules.py, panel/services/schedules.py). The panel's own
    background jobs, the three whose timing may be changed, and (for the panel owner) the switch for
-   the root cron page. Its own form, outside the Settings form. Folded: a page of rows most visits
-   never open. Times are typed and shown in the viewer's zone (schedules.js); stored in UTC. #}
+   the root cron page. Its own form, outside the Settings form. Open, like every fold holding a setting
+   (js/fold_memory.js keeps a viewer's own close). Times are typed and shown in the viewer's zone (schedules.js); stored in UTC. #}
 {% set sc = schedules_card() %}
-<details class="card mt-3" id="sec-schedules">
+<details class="card mt-3" id="sec-schedules" open data-fold="sec-schedules">
   <summary class="card-header uid-summary-card"><i class="bi bi-clock-history"></i> Schedules</summary>
   <div class="card-body">
     <form method="POST" action="{{ url_for('settings_schedules_save') }}"

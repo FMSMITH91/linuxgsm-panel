@@ -99,7 +99,8 @@ the weakness, and asks for a patch management process and staged rollouts instea
 
 ## History
 
-The **History** fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
+The **Nightly window** section is drawn open (close it and it stays closed for you, in this browser). The **History**
+fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
 ended (done, failed, waited for the next window, queued for when players leave). Each time is on the clock of the
 host the update ran on, as the window's times are. A game update's end reads as one line (the build it installed,
 when LinuxGSM printed it); its full output stays in the audit log. It is read from the audit log, so it shows the same

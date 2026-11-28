@@ -55,7 +55,7 @@
     </div>
     {% endif %}
     <p class="text-secondary small mb-2" id="push-relay-note">Relayed encrypted by your browser's push service (Google, Microsoft, Apple or Mozilla). ntfy uses none.</p>
-    {% call fold('Your devices and which alerts') %}
+    {% call fold('Your devices and which alerts', open_=True, remember='push-devices') %}
     {% if pc.devices %}
     <ul class="list-unstyled small mb-2" id="push-devices">
       {% for d in pc.devices %}

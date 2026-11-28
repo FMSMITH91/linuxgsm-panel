@@ -11,7 +11,7 @@
       <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRuleAdd" data-args='["deny"]'><i class="bi bi-slash-circle"></i> Block a path</button>
     </div>
     {% if current_user.is_superadmin %}
-    <details class="mb-2">
+    <details id="wr-raw-box" class="mb-2" open data-fold="wr-raw-box">
       <summary class="small">Raw web proxy lines</summary>
       <label for="wr-raw" class="visually-hidden">Raw web proxy lines</label>
       <textarea id="wr-raw" class="form-control form-control-sm font-monospace mt-1" rows="4" maxlength="4000" spellcheck="false"></textarea>

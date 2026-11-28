@@ -134,6 +134,7 @@ def _card276():
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoSelect(){ return node(); }\n"
             "function ownPlugins(){} function geoStatus(){} function creditLine(){} var WEB = {open: function(){}};\n"
+            "var window = {};\n"     # settingsFold puts a viewer's own close of the fold back (window.restoreFolds)
             + _cut47(src, "var BM = (function") + ")();\n"     # BlueMap's closure, which installedRow reads
             + _cut47(src, "function settingsFold(") + "\n" + _cut47(src, "function installedRow(") + "\n"
             "function pick(m){ return m === 'adSettings' || m.indexOf('Update the add-on first') === 0"

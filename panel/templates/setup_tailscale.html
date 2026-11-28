@@ -19,10 +19,10 @@
         <div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Checking Tailscale on this host…</div>
       </div>
       {# The optional control server for the join (a self-hosted one such as Headscale), shown by
-         setup_tailscale.js while this host is not yet on a tailnet. Folded: most never open it. #}
+         setup_tailscale.js while this host is not yet on a tailnet. Open, like every fold holding a setting. #}
       {% from "_fold.html" import fold %}
       <div id="ts-control-wrap" class="mt-2" data-start-hidden>
-      {% call fold('Self-hosted control server (Headscale)?') %}
+      {% call fold('Self-hosted control server (Headscale)?', open_=True, remember='ts-setup-control') %}
         <label class="form-label small" for="ts-control">Control server address</label>
         <input id="ts-control" type="url" class="form-control form-control-sm" maxlength="255"
                placeholder="https://headscale.example.com" autocomplete="off" spellcheck="false">

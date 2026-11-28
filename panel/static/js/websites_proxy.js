@@ -125,6 +125,10 @@
     var allow = WS.el('wp-guard-allow');
     if (allow) allow.value = (g.allow || []).join('\n');
     WS.show('wp-guard-f2b', g.fail2ban === 'absent');
+    // Its label says what is inside when a viewer has closed it: on or off, and how many settings.
+    var sum = WS.el('wp-guard-sum');
+    if (sum) sum.textContent = WS.TF(g.enabled !== false ? 'Blocked visitors: on, {n} settings' : 'Blocked visitors: off, {n} settings',
+                                     {n: Object.keys(GUARD_FIELDS).length + 3});
     window.wsGuardCheck();
   }
   window.wsGuardCheck = function () {

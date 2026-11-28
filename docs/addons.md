@@ -81,7 +81,8 @@ Not offered:
 
 ### B3's settings
 
-An installed B3 has a folded **B3 settings** section on its row: **Apply** rewrites only these, in
+An installed B3 has a **B3 settings** section on its row, drawn open (close it and it stays closed for you, in this
+browser): **Apply** rewrites only these, in
 `b3.ini` and `conf/plugin_geolocation.ini`, and keeps every other edit you made there and in `conf/`.
 
 - **Geolocation**, off by default:

@@ -577,6 +577,8 @@ function _sectionSwapped(cur){
   // before the after-hook shows or hides one (#srv-none in the dashboard's cards, the GMod
   // content option). Left as the mark, CSS keeps it hidden and display '' cannot show it.
   if (window.applyStartHidden) window.applyStartHidden(cur);
+  // ...and a fold the viewer closed arrives drawn open again (fold_memory.js): put it back as they left it.
+  if (window.restoreFolds) window.restoreFolds(cur);
 }
 // Whether `form` carries a token the server rendered into it. Only a template's form does: markup
 // injected into a page cannot know the token, and an ajax form is sent with the fetch wrapper's

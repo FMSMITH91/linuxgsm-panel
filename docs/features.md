@@ -40,6 +40,9 @@ Back to the [README](README.md). Who may do what: [permissions.md](permissions.m
 - **Schedules** (Administration → Settings → Schedules): every job the panel runs by itself, with what it does, how often, and when it last ran and runs next. The daily panel backup's time of day, how often the panel checks for its own updates, and the daily OS-update check (its time, or off) can be changed there; times are shown in your own time zone.
 - **Root's crontab** (the panel owner only, off by default): add, change and delete root's cron jobs on any host, with `/etc/cron.d` shown read-only and the panel's own files marked. The owner turns it on under Settings → Schedules; each change asks for the password (and 2FA code) and is audited with the old and new line. On the panel host it also has to be opened at install with `PANEL_ROOT_CRON=1`. A job runs as root, so anything it runs can change everything on that host.
 
+**Settings are never tucked away:** every section that holds a setting is drawn open, and one that does not apply
+is greyed with the reason rather than removed; close a section and it stays closed for you, in this browser.
+
 **Also:** branding and session settings in-app, HTTPS by default, TOTP 2FA with backup codes, English/Spanish/French, light and dark themes, installable on a phone's home screen, and a **What's new** card after each update.
 
 ## Rebooting a host

@@ -1,7 +1,7 @@
 {# Add a customer (administrators): a customer group holding the chosen sites, and a one-time invite
    link with its code, both shown once (js/websites.js, wsCustomerAdd; POST /websites/customers/add,
    a step-up route). The customer opens the link and chooses their own name and password. #}
-<details id="wc-box" class="card mt-3">
+<details id="wc-box" class="card mt-3" open data-fold="wc-box">
   <summary class="card-header small"><i class="bi bi-person-plus"></i> Add a customer</summary>
   <form id="wc-form" class="card-body row g-2" data-action="wsCustomerAdd" data-args='["@event"]' data-on="submit">
     <div class="col-sm-6">

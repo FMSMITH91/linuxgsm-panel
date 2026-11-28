@@ -356,6 +356,30 @@ def _image_ref(site, probe):
     return (head, tag) if colon and "/" not in tag else (name, "")
 
 
+# The Overview's Software line names what a person knows, each with its own version, never the image's name and hash.
+APP_NAMES = {"wordpress": "WordPress", "phpbb": "phpBB"}
+S_STATIC_SOFTWARE = "Its files, served as they are"
+
+
+def software_line(site):
+    """The Overview's Software line: "WordPress 7.1.5 · PHP 8.4", "PHP 8.4", "Node.js 22" or a plain site's words.
+
+    Each product names its own version, so a bare "Version 7.1.5" never leaves the reader guessing which one.
+    """
+    def named(product, version):
+        return ("%s %s" % (product, version)).strip()
+    parts = []
+    if site.kind in APP_NAMES:
+        parts.append(named(APP_NAMES[site.kind], site.app_version or ""))
+    if site.kind in ("php", "wordpress", "phpbb") and site.php_version:
+        parts.append(named("PHP", site.php_version))
+    if site.kind == "app":
+        parts.append(named("Node.js", site.runtime_version or ""))
+    if parts:
+        return " · ".join(parts)
+    return i18n.tr(S_STATIC_SOFTWARE) if site.kind == "static" else ""
+
+
 def _last_backup(probe):
     """The newest backup's time as the Backups tab writes it; "" when the host said there is none; None when unread."""
     if not (probe or {}).get("ok"):
@@ -377,7 +401,7 @@ def _setup_unfinished(site):
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
-           "image": _image(site, probe),
+           "image": _image(site, probe), "software": software_line(site),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
            "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe),
            "setup_unfinished": _setup_unfinished(site)}

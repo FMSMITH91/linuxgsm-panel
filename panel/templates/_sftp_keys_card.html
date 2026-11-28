@@ -46,8 +46,8 @@
     {% endif %}
 
     {% if sk.key_rows|length < sk.max_keys %}
-    {# Folded once a key is there: adding another is the rare case, and the card stays short on a phone. #}
-    {% call fold('Add a key', open_=not sk.key_rows) %}
+    {# Open, like every fold holding a setting; a viewer may close it (js/fold_memory.js). #}
+    {% call fold('Add a key', open_=True, remember='sftp-key-add') %}
     <form method="POST" action="{{ url_for('account_sftp_key_add') }}" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="form-label small mb-1" for="sftp-key">Public key (the one line in your .pub file)</label>
       <textarea id="sftp-key" name="public_key" rows="2" class="form-control form-control-sm font-monospace" required

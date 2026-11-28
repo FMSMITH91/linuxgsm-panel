@@ -186,8 +186,10 @@ really runs; otherwise the previous settings are put back and the proxy's own er
 
 ### Security settings
 
-The same card has a folded **Security settings** section (the **Web proxy & security settings** button at the
-top of the Websites page leads to the card). Every value can be changed; OWASP's recommended value is printed
+The same card has a **Security settings** section (the **Web proxy & security settings** button at the top of the
+Websites page leads to the card, and a site's Domains and Performance tabs link to it for a superadmin). It is drawn
+open, like **How visitors reach your sites** and **Blocked visitors** above it; close one and it stays closed for you
+(in this browser), and its label still says what is inside ("Security settings: 17 settings"). Every value can be changed; OWASP's recommended value is printed
 beside the field, and a value outside it shows a note but is still saved. **Save settings** applies the proxy's
 settings to every host with an online site at once; if a host's proxy refuses them, nothing is saved and the card
 says why.
@@ -428,6 +430,9 @@ Saving restarts the site's PHP gracefully.
 
 ## Performance
 
+A site without PHP (a plain site or a Node.js app) still shows OPcache and the object cache, greyed with the line
+"Only for PHP sites": they are never removed from the page, and never sent when you save.
+
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
   by default. Turning it on or off starts or removes the cache beside the running site; the site itself is
@@ -521,7 +526,9 @@ Off by default, for visitors' privacy. When an administrator turns them on for a
 addresses are shortened before they are kept, and they are kept for the days set in Security settings.
 The site's own error log is always readable on its Overview tab.
 
-The Overview shows what the site runs (the image of its container) and what it uses: memory, disk and CPU,
+The Overview shows what the site runs, as you know it: "WordPress 7.1.5 · PHP 8.4", "PHP 8.3" or "Node.js 22", each
+product with its own version (the container's image name and id are only the line's tooltip), and what it uses:
+memory, disk and CPU,
 read from the host when the page is opened. A figure that cannot be read says so and why (the site is not
 running, the host did not answer, or Podman's own words), never an empty bar. On a host that does not let
 a site's account limit its own containers, it also says the CPU limit is set on the whole account.

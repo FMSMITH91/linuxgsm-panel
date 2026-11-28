@@ -5,9 +5,12 @@
    it is ever unreachable because a page's JS failed, and the browser keeps its open state while
    the page lives. `label` is a fixed English phrase passed by the caller; it is rendered as a text
    node of its own, so the page's translator finds it in the catalog like any other.
-   `open_` opens it from the first paint (a section the viewer has already set up, say). #}
-{% macro fold(label, id='', open_=False, cls='', icon='') -%}
-<details class="uis-fold {{ cls }}"{% if id %} id="{{ id }}"{% endif %}{% if open_ %} open{% endif %}>
+   `open_` opens it from the first paint: every fold that holds a setting or a control that changes something
+   starts open, so nothing a person may change is tucked away; help text, logs and lists may start closed.
+   `remember` names the fold for js/fold_memory.js, which keeps a viewer's own close (or open) of it in their
+   browser, so the page opens for everyone by default and stays how each person left it. #}
+{% macro fold(label, id='', open_=False, cls='', icon='', remember='') -%}
+<details class="uis-fold {{ cls }}"{% if id %} id="{{ id }}"{% endif %}{% if open_ %} open{% endif %}{% if remember %} data-fold="{{ remember }}"{% endif %}>
   <summary class="uis-fold-sum">{% if icon %}<i class="bi bi-{{ icon }}"></i> {% endif %}<span>{{ label }}</span></summary>
   <div class="uis-fold-body">{{ caller() }}</div>
 </details>
