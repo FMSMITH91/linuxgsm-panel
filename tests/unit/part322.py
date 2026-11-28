@@ -526,6 +526,7 @@ def _s8_blocked_page():
   const row = $('wv-list').children[0];
   const shown = {text: row ? row.textContent : '', state: $('wv-state').textContent, n: $('wv-count').textContent};
   window.wsUnblock('198.51.100.77');
+  dialogs.forEach(function (d) { d.onConfirm(); });      // Unblock asks first (its confirmation)
   for (let i = 0; i < 4; i++) await tick();
   return {shown: shown, left: $('wv-list').children.length, n: $('wv-count').textContent, msg: $('wv-msg').textContent};
 """, routes)

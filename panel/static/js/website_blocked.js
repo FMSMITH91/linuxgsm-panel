@@ -75,11 +75,20 @@
     var count = WS.el('wv-count');
     if (count) count.textContent = String(list.children.length);
   }
-  window.wsUnblock = function (ip) {
+  // Asked first, as the panel's other confirmations are; an address already lifted on the host answers success too,
+  // and its row goes the same way.
+  function unblock(ip) {
     WS.say('wv-msg', WS.T('Working…'));
-    WS.post(WS.R.act(ID, 'blocked/unban'), {ip: String(ip)}).then(function (d) {
-      if (WS.done(d, 'wv-msg')) dropRow(String(ip));
+    WS.post(WS.R.act(ID, 'blocked/unban'), {ip: ip}).then(function (d) {
+      if (WS.done(d, 'wv-msg')) dropRow(ip);
     });
+  }
+  window.wsUnblock = function (ip) {
+    var addr = String(ip);
+    if (!window.confirmDialog) { unblock(addr); return; }
+    window.confirmDialog({title: WS.TF('Unblock {ip}?', {ip: addr}), icon: 'unlock', confirmClass: 'btn-primary',
+      confirmLabel: WS.T('Unblock'), onConfirm: function () { unblock(addr); },
+      bodyText: WS.T('It can visit every website on this host again. If it attacks again, it is blocked again.')});
   };
   // Opened straight on the Rules tab (?tab=rules): website_site.js picked the tab before this file was loaded.
   var pane = document.querySelector('[data-ws-pane="rules"]');

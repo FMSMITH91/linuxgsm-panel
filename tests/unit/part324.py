@@ -621,6 +621,30 @@ def _s7_proxy_card():
        ("How visitors reach your sites: Restricted", "How visitors reach your sites: Tunnel", None))
 
 
+def _s7_unblock_asks():
+    from unit.part301 import _site_ad301
+    entry = {"ip": _V324, "jail": "lgsm-web-login", "reason": "Too many sign-in attempts",
+             "since": "2026-11-27 10:00:00 UTC", "until": "2026-11-27 10:10:00 UTC"}
+    got = _node324(_site_ad301, ["websites_common.js", "website_site.js", "website_blocked.js"], r"""
+  WS.loadBlocked();
+  for (let i = 0; i < 4; i++) await tick();
+  window.wsUnblock('198.51.100.7');
+  for (let i = 0; i < 4; i++) await tick();
+  const asked = {n: dialogs.length, title: dialogs.length ? dialogs[0].title : '',
+                 posts: calls.filter(function (c) { return c[0] === 'POST'; }).length};
+  dialogs.forEach(function (d) { d.onConfirm(); });
+  for (let i = 0; i < 4; i++) await tick();
+  return {asked: asked, posts: calls.filter(function (c) { return c[0] === 'POST'; }).length,
+          left: $('wv-list').children.length, n: $('wv-count').textContent};
+""", {"/websites/7/blocked": {"success": True, "entries": [entry], "count": 1, "others": 0,
+                              "guard": {"enabled": True, "fail2ban": "yes"}},
+      "/websites/7/blocked/unban": {"success": True, "message": "It was already unblocked.", "already": True}})
+    eq("Blocked visitors (js/website_blocked.js, Unblock): it asks first, naming the address, and nothing is sent "
+       "before Confirm; on Confirm the row goes and the count follows (an already-lifted answer included)",
+       (got.get("asked"), got.get("posts"), got.get("left"), got.get("n"), got.get("error")),
+       ({"n": 1, "title": "Unblock %s?" % _V324, "posts": 0}, 1, 0, "0", None))
+
+
 # ── 8. An apply loads through the admin socket when both sides have it ────────────────────────────
 def _admin_server324(path, got):
     """A unix socket at `path` answering one request 200, its bytes kept in got["req"]."""
@@ -740,6 +764,7 @@ _PAGES324 = (
     _s6_title,
     _s6_badge,
     _s7_proxy_card,
+    _s7_unblock_asks,
 )
 _HOST324 = (
     _s1_until,
