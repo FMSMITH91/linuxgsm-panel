@@ -47,6 +47,7 @@ from panel.services import websites_recipes as _wr331
 _ROWS331 = {"sites": [], "remotes": [], "users": [], "groups": []}
 _TOKEN331 = "q" * 40
 _DOM331 = "p331.example.org"
+_NONE331 = ""        # a stand-in row's empty certificate fields
 
 
 def _client331(uid):
@@ -145,7 +146,8 @@ def _old_table_sql(engine):
     """website_domain's CREATE TABLE as a version before folders made it: a UNIQUE on domain alone."""
     sql = str(_sa331.schema.CreateTable(_Dom331.__table__).compile(engine))
     new = "CONSTRAINT uq_website_domain_address UNIQUE (domain, path)"
-    assert new in sql, sql
+    if new not in sql:
+        raise RuntimeError("the model's CREATE TABLE has no (domain, path) UNIQUE: %s" % sql)
     return sql.replace(new, "UNIQUE (domain)")
 
 
@@ -154,7 +156,7 @@ def _insert331(engine, site_id):
     try:
         with engine.begin() as conn:
             conn.exec_driver_sql("INSERT INTO website_domain (website_id, domain, path, is_primary, cert_mode) "
-                                 "VALUES (%d, 'old.%s', '/forums', 0, 'acme')" % (site_id, _DOM331))
+                                 "VALUES (?, ?, '/forums', 0, 'acme')", (site_id, "old." + _DOM331))
         return "stored"
     except _IntegrityError331:
         return "refused"
@@ -186,7 +188,7 @@ def _s1_migration():
         with engine.begin() as conn:
             conn.exec_driver_sql(_old_table_sql(engine))
             conn.exec_driver_sql("INSERT INTO website_domain (id, website_id, domain, path, is_primary, cert_mode) "
-                                 "VALUES (7, 1, 'old.%s', '', 1, 'acme')" % _DOM331)
+                                 "VALUES (7, 1, ?, '', 1, 'acme')", ("old." + _DOM331,))
         before, after, folder, again, rows = _migrate331(engine)
     finally:
         engine.dispose()
@@ -240,10 +242,10 @@ def _s2_routes(host, other_host, su):
     app = _site331(host, "p331app", kind="wordpress", app_recipe="wordpress")
     eq("folder (refused: a one-click app installed at a root keeps its address; its folder is chosen at install)",
        _add331(su.id, app, domain=_DOM331, folder="wp"), (409, _wf331.S_APP_FOLDER))
-    _s2_tenants(host, root, nest)
+    _s2_tenants(host, root)
 
 
-def _s2_tenants(host, root, nest):
+def _s2_tenants(host, root):
     mine = _site331(host, "p331mine")
     tenant = _user331("p331-tenant", [mine])
     owner = _user331("p331-owner", [mine, root])
@@ -261,7 +263,6 @@ def _s2_tenants(host, root, nest):
        (_add331(owner.id, mine, domain=_DOM331, folder="shop")[0], _rows331(mine)), (200, [(_DOM331, "/shop")]))
     eq("root (refused to someone who manages none of the folder sites on a domain with no root site)",
        _add331(owner.id, mine, domain=lone.domains[0].domain), (409, _wf331.S_DOMAIN_TAKEN))
-    del nest
 
 
 # ── 3. The proxy ─────────────────────────────────────────────────────────────────────────────────
@@ -284,13 +285,13 @@ class _P331:
 
 def _row331(rid, domain, path="", site=None):
     return _NS331(id=rid, domain=domain, path=path, is_primary=True, verified_at=_utcnow331(), cert_mode="acme",
-                  own_cert_pem="", own_key_secret="", website=site, address=domain + path)
+                  own_cert_pem=_NONE331, own_key_secret=_NONE331, website=site, address=domain + path)
 
 
 def _fake_site331(sid, name, rows, **kw):
-    s = _NS331(id=sid, name=name, port=20500 + sid, enabled=True, proxy_secret="x", max_body_mb=64, static_cache=False,
+    s = _NS331(id=sid, name=name, port=20500 + sid, enabled=True, proxy_secret=_TOKEN331, max_body_mb=64, static_cache=False,
                custom_rules=kw.get("rules", "[]"), page_cache=kw.get("cache", False), page_cache_ttl=120,
-               access_log=kw.get("log", False), raw_proxy_snippet="", own_cert_pem="", own_key_secret="")
+               access_log=kw.get("log", False), raw_proxy_snippet="", own_cert_pem=_NONE331, own_key_secret=_NONE331)
     s.domains = rows
     return s
 

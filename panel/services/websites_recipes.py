@@ -100,8 +100,8 @@ def _db_values(db):
 def _site_values(site, admin, names):
     domain = names[0] if names else ""
     folder = _folder_of(site)
-    return {"site_name": admin.get("site_name", site.name), "site_url": "https://%s%s" % (domain, folder) if domain else "",
-            "domain": domain, "base_path": folder or "/", "cookie_path": folder + "/", "admin_user": admin.get("user", ""), "admin_email": admin.get("email", ""),
+    url = "https://%s%s" % (domain, folder) if domain else ""
+    return {"site_name": admin.get("site_name", site.name), "site_url": url, "domain": domain, "base_path": folder or "/", "cookie_path": folder + "/", "admin_user": admin.get("user", ""), "admin_email": admin.get("email", ""),
             "admin_password": admin.get("password", ""),
             "trusted_hosts": ", ".join("'^%s$'" % re.escape(d).replace("\\-", "-") for d in names)}
 
