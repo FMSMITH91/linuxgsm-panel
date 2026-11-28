@@ -678,6 +678,25 @@ def _upd_answer322(action):
                          "action": "website_update", "target": "shop", "ok": True, "detail": ""}]}
 
 
+def _s9_page():
+    from unit.part301 import _page301
+    from unit.part12 import P9_ADMIN
+    page = _page301("updates.html", P9_ADMIN, allowed=True)
+    cust = _node322(page, ["updates.js"], _UPD_SCN322, {"/api/updates": _upd_answer322(None)})
+    admin = _node322(page, ["updates.js"], _UPD_SCN322, {
+        "/api/updates": _upd_answer322({"post": "/websites/9/update-image"}),
+        "/websites/9/update-image": {"success": True, "message": "The website was updated."}})
+    eq("Updates page (js/updates.js, a viewer with nothing they may run): Update everything safe now stays in place, "
+       "greyed, with the reason beside it", (cust.get("disabled"), cust.get("why"), cust.get("error")),
+       (True, "None of these is yours to update now: its administrators or the nightly window update it.", None))
+    eq("Updates page (History): a row's time is the host's clock the server sent, never the browser's",
+       "2026-11-26 23:54" in (cust.get("hist") or ""), True)
+    eq("Updates page (Update now): the row stays with its result and no button (the list read again would drop it, "
+       "and the result with it); control: with something to run, the safe button's reason is hidden",
+       ("The website was updated." in (admin.get("row") or ""), admin.get("button"), admin.get("why"), admin.get("error")),
+       (True, 0, "", None))
+
+
 def _s9_overview():
     from unit.part301 import _SITE301, _page301
     from unit.part12 import P9_ADMIN
@@ -747,7 +766,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_proxy_card, _s8_blocked_page, _s9_overview):
+for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_proxy_card, _s8_blocked_page, _s9_page, _s9_overview):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():
