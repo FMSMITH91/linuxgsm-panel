@@ -714,8 +714,9 @@ def _status_flips(app, scanned):
             # progress row vanish and show "Not installed" the moment you navigated back.
             if not gs.installed or gs.status in ("installing", "configuring"):
                 continue
+            # getattr: a status read never raises; a row without its account counts every socket, as before.
             st = "online" if game_port_listening(getattr(gs, "game_type", None), gs.port, ports,
-                                                 gs.short_name) else "offline"
+                                                 getattr(gs, "short_name", None)) else "offline"
             if gs.status != st:
                 # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
                 # commit then flushes one UPDATE per server no matter what bulk statement runs

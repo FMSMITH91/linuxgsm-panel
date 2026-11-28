@@ -2344,7 +2344,7 @@ def _poll_for_game_port(remote, gs):
             if live is None:
                 continue
             scan_read = True
-            if gs.port and _sm.game_port_listening(gs.game_type, gs.port, live, gs.short_name):
+            if gs.port and _sm.game_port_listening(gs.game_type, gs.port, live, getattr(gs, "short_name", None)):
                 really_up = True
                 break
     except Exception:
@@ -2466,7 +2466,7 @@ def _rescan_started(remote, gs, started):
     really_up, s_rc, start_out = started
     live = _listening_now(remote)
     if live is not None:
-        really_up = _sm.game_port_listening(gs.game_type, gs.port, live, gs.short_name)
+        really_up = _sm.game_port_listening(gs.game_type, gs.port, live, getattr(gs, "short_name", None))
         gs.status = "online" if really_up else "offline"
         db.session.commit()
     return really_up, s_rc, start_out
