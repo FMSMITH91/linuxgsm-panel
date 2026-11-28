@@ -11,7 +11,9 @@
    the object cache on its Performance tab, disabled, reading off, and never sent on Save.
 4. A website's Overview names its software as a person knows it ("WordPress 7.1.5 · PHP 8.4"), the image only as the
    line's tooltip, and says nothing about tabs the site does not have.
-5. The Blocked visitors label says on or off and how many settings, so a closed one still says what is inside.
+5. Links from inside a site to the host-wide settings (Domains -> certificates, Performance -> page cache), for a
+   superadmin only; the Blocked visitors label says on or off and how many settings, so a closed one still says what
+   is inside.
 
 HOW IT RUNS. part12's app and its database (tripwire armed): pages through their routes with the host's probe stood in;
 fold_memory.js in node over a small DOM of this part's own; the website pages' scripts over part301's harness.
@@ -379,6 +381,15 @@ def _s4_overview_js():
 
 
 # ── 5. links to the host-wide settings; a closed fold's label ────────────────────────────────────────
+def _s5_links(st):
+    site = _site329(st, "p329-links", "php", php_version="8.4")
+    page = _get329("/websites/%d" % site.id).get_data(as_text=True)
+    hrefs = [m.group(1) for m in _re329.finditer(r'<a id="(?:wd-proxy-certs|wperf-page-link)"[^>]*href="([^"]+)"', page)]
+    eq("links: a superadmin's site page links Domains to the certificate settings and Performance to the page cache, "
+       "both on the Websites page's security settings", hrefs, ["/websites#wp-opts-box", "/websites#wp-opts-box"])
+    from unit.part301 import _site_na301
+    eq("links: an administrator who is not a superadmin gets neither (the settings are a superadmin's)",
+       ('id="wd-proxy-certs"' in _site_na301, 'id="wperf-page-link"' in _site_na301), (False, False))
 
 
 _GUARD329 = r"""
@@ -443,7 +454,7 @@ with _p9.app_context():
         _ROWS329["remotes"].append(_r329.id)
         _st329 = {"remote": _r329.id}
         _plain329 = (_s1_gate, _s1_b3_fold, _s2_memory, _s2_wiring, _s3_perf_save, _s4_overview_js, _s5_guard_label)
-        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages, _s4_software)]
+        for _sec329, _args329 in ([(s, (_st329,)) for s in (_s1_pages, _s3_perf_pages, _s4_software, _s5_links)]
                                   + [(s, ()) for s in _plain329]):
             _err329 = _ran329(_sec329, *_args329)
             check("part329: %s ran to the end" % _sec329.__name__, not _err329, _err329)

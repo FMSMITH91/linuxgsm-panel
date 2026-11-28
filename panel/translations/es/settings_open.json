@@ -1,6 +1,8 @@
 {
+  "Certificate settings for every site": "Ajustes de certificados para todos los sitios",
   "PHP caches": "Cachés de PHP",
   "Only for PHP sites: this website runs no PHP.": "Solo para sitios PHP: este sitio web no ejecuta PHP.",
+  "The web proxy's page cache (every site)": "La caché de páginas del proxy web (todos los sitios)",
   "Blocked visitors: on, {n} settings": "Visitantes bloqueados: activado, {n} ajustes",
   "Blocked visitors: off, {n} settings": "Visitantes bloqueados: desactivado, {n} ajustes",
   "Its files, served as they are": "Sus archivos, servidos tal cual"

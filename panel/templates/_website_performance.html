@@ -43,7 +43,7 @@
       </div>
       <div class="form-text">Purge empties this site's cached pages only; nothing restarts. Once a minute at most.</div>
       <div id="wperf-page-why" class="small text-warning" hidden></div>
-      <a id="wperf-page-link" class="small" href="{{ url_for('websites_page') }}#wp-opts-box" hidden>Open the web proxy's security settings</a>
+      {% if current_user.is_superadmin %}<a id="wperf-page-link" class="small" href="{{ url_for('websites_page') }}#wp-opts-box">The web proxy's page cache (every site)</a>{% endif %}
     </div>
     <div class="ws-opt">
       <div class="form-check form-switch mb-1">

@@ -191,7 +191,6 @@
     var text = why || (p.page_cache ? '' : WS.T('Save first: the page cache starts with the next visits.'));
     var line = WS.el('wperf-page-why');
     if (line) { line.textContent = text; WS.show(line, !!text); }
-    WS.show('wperf-page-link', !!why && on && WS.can.sup);
   };
   window.wsPurge = function () {
     WS.say('wperf-msg', WS.T('Purging…'));
