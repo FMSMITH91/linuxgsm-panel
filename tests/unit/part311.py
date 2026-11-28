@@ -126,6 +126,14 @@ def _tools311():
             fh.write("#!%s\n%s" % (_sys311.executable, _FAKE311))
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
         os.chmod(path, 0o700)
+    # The tunnel apply's settle loop sleeps one second per poll, up to TUNNEL_SETTLE_S polls: ~35 s of this
+    # part was those sleeps. What the checks read is the state each poll finds and after how many polls (the
+    # stand-ins count their calls), never the clock, so the loop's `sleep` returns at once here.
+    path = os.path.join(_BIN311, "sleep")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\nexit 0\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+    os.chmod(path, 0o700)
 
 
 def _home311(account):

@@ -449,7 +449,7 @@ with _tf325.TemporaryDirectory() as _td325:
     _key325 = ("route_answer_keys", os.path.realpath(_td325), getattr(_sa325, "_code_identity", lambda: None)())
     _held325 = _store325.get(_key325)
     _rb325 = _sb325.route_answer_keys(_td325)
-    _rc325 = _sc325.route_answer_keys(_td325)
+    _sc325.route_answer_keys(_td325)
     _held_c325 = _store325.get(("route_answer_keys", os.path.realpath(_td325), getattr(_sc325, "_code_identity", lambda: 0)()))
 check("i18n_scan: a second copy of the scanner answers a scan of unchanged files from the one process-wide cache "
       "(the entry the first copy made, untouched), and a copy with a stood-in function computes its own",

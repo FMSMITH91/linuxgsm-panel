@@ -142,6 +142,27 @@ jobs:
           python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
           --pr "$PR" --head-sha "$HEAD_SHA"
 
+      # On a push to main: whether the pull request this push merged already passed this job on the
+      # exact tree pushed. When it did, the steps below are skipped and the job still reports success
+      # under its name, which is what the panel's update gate and deploy.yml read on main's commit.
+      # What it proves, and why that is enough, is .github/scripts/reuse_pr_result.py's docstring;
+      # anything it cannot establish runs every step. The work steps it names are the ones a
+      # documentation-only pull request skips, so a pass that skipped them is never reused. It fetches
+      # the pull request's head anonymously (the checkout keeps no token; this repository is public).
+      - name: Did the merged pull request pass this job on the same tree?
+        id: reuse
+        if: github.event_name == 'push' && steps.scope.outputs.docs_only != 'true'
+        env:
+          CHECK_NAME: checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/reuse_pr_result.py --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+          --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --workflow .github/workflows/ci.yml
+          --check-name "$CHECK_NAME"
+          --work-step "Run all checks (compile, lint, unit, smoke, shellcheck)"
+          --work-step "Run the root-only unit checks, as root"
+          --work-step "Every unit part ran here, none left out by a selection"
+
       # On a pull request, a unit shard runs the parts its change can affect: the setup, part15,
       # every part that walks the tree, every part the change edits (and those importing one), and
       # every part main's impact map says ran, read or listed what changed (tests/unit/impact.py).
@@ -163,27 +184,6 @@ jobs:
         run: >-
           python3 .github/scripts/unit_select.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
           --pr "$PR" --head-sha "$HEAD_SHA"
-
-      # On a push to main: whether the pull request this push merged already passed this job on the
-      # exact tree pushed. When it did, the steps below are skipped and the job still reports success
-      # under its name, which is what the panel's update gate and deploy.yml read on main's commit.
-      # What it proves, and why that is enough, is .github/scripts/reuse_pr_result.py's docstring;
-      # anything it cannot establish runs every step. The work steps it names are the ones a
-      # documentation-only pull request skips, so a pass that skipped them is never reused. It fetches
-      # the pull request's head anonymously (the checkout keeps no token; this repository is public).
-      - name: Did the merged pull request pass this job on the same tree?
-        id: reuse
-        if: github.event_name == 'push' && steps.scope.outputs.docs_only != 'true'
-        env:
-          CHECK_NAME: checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          python3 .github/scripts/reuse_pr_result.py --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
-          --repo "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA" --workflow .github/workflows/ci.yml
-          --check-name "$CHECK_NAME"
-          --work-step "Run all checks (compile, lint, unit, smoke, shellcheck)"
-          --work-step "Run the root-only unit checks, as root"
-          --work-step "Every unit part ran here, none left out by a selection"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: (steps.scope.outputs.docs_only != 'true' || matrix.docs) && steps.reuse.outputs.reuse != 'true'
@@ -862,7 +862,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unit-impact-map
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: ignore
           path: unit-impact-map.json
 
