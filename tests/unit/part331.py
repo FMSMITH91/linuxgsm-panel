@@ -6,10 +6,11 @@
    user's sites already has on the same host; folders never nest; a site has one folder; a one-click app's folder is
    chosen at install; a static site moved into a folder has its own server written again.
 3. The proxy: one block per shared domain, a handle per folder (longest first) before the root's, the prefix kept,
-   in public and tunnel mode; the guard's paths, rules and page cache under the folder; loggers on the block.
+   in public and tunnel mode; the guard's paths, rules and page cache under the folder; loggers on the block; the
+   folder without its slash answered with a 308 to it (reconcile_proxy, every exposure mode).
 4. The guard maps a ban to the site by domain and folder (the helper's lgsm_folder, the routes' Blocked list).
 5. The apps and the sites' own servers under a folder: each recipe's base URL and cookie path, Apache's Alias,
-   nginx's alias, the installer's loopback paths.
+   nginx's alias, the installer's loopback paths; no redirect a site's own server builds names its inside port.
 6. The pages: the site's address, Open site, the Domains tab's folder form and its OWASP note, es/fr.
 
 HOW IT RUNS. Through part12's app (its tripwire armed): routes by the test client with the host calls stubbed, the
@@ -364,6 +365,38 @@ def _s3_guard():
           "\t\t\tpath /wp-login.php /xmlrpc.php" in root and "lgsm_folder" not in root, root[:600])
 
 
+def _applied331(remote, mode):
+    """The configuration reconcile_proxy hands the host for `remote`'s online sites in exposure mode `mode`."""
+    sent = []
+    _p9_patch(_sw331, "ports_apply", lambda *a, **k: (True, ""))
+    _p9_patch(_sw331, "proxy_apply", lambda r, text, *a, **k: sent.append(text) or (True, ""))
+    _w331.proxy_row(remote.id).exposure_mode = mode
+    _db331.session.commit()
+    ok, _said = _w331.reconcile_proxy(remote)
+    return sent[-1] if ok and sent else ""
+
+
+def _s3_bare(host):
+    """The folder asked for without its slash: the proxy's 308 to the folder (it named the site's inside port)."""
+    _site331(host, "p331bare", kind="static", address="bare." + _DOM331, enabled=True)
+    blog = _site331(host, "p331blog", kind="php", address="bare.%s/blog" % _DOM331, enabled=True, php_version="8.4")
+    got = {}
+    for mode in ("public", "restricted", "tunnel"):
+        a = _block331(_applied331(host, mode) or "#", "# domain bare.%s" % _DOM331)
+        handle = a[a.index("handle @lgsmfolder%d {" % blog.id):a.index("# site ", a.index("handle @lgsmfolder"))]
+        got[mode] = ("\t\t@lgsmbare%d path /blog\n" % blog.id in handle,
+                     "\t\tredir @lgsmbare%d /blog/{?query} 308\n" % blog.id in handle,
+                     handle.find("redir @lgsmbare") < handle.find("reverse_proxy"), "lgsmbare" in a[a.index("\thandle {"):])
+    eq("a folder without its slash (reconcile_proxy -> proxy_apply, every exposure mode): the folder's handle answers "
+       "/blog itself with a 308 to /blog/ (a path: the visitor's own scheme and host; the query kept) before the site "
+       "sees it, and the root site's handle has no such line (control); the site's Apache answered "
+       "http://<domain>:8080/blog/", got, {m: (True, True, True, False) for m in ("public", "restricted", "tunnel")})
+    guarded = _block331(_render331("public", guard=True), "# domain a.%s" % _DOM331)
+    check("a folder without its slash, with the guard on: the 308 is there beside the banned visitors' 403, which the "
+          "proxy runs first (order error first)", "redir @lgsmbare3 /community/forums/{?query} 308" in guarded
+          and "error @lgsmdeny 403" in guarded and "\torder error first" in _render331("public", guard=True), guarded[:900])
+
+
 # ── 4. The guard's mapping ───────────────────────────────────────────────────────────────────────
 def _helper331():
     import importlib.machinery as _mach
@@ -472,6 +505,28 @@ def _s5_servers(host):
         "location ~ /\\. {" in nginx, "alias" in root_nginx), (True, True, True, False))
 
 
+def _s5_redirects(host):
+    """A redirect a site's own server builds never names its inside port (Apache named http://<domain>:8080/...)."""
+    php = _site331(host, "p331rp", kind="php", address="rp.%s/blog" % _DOM331, php_version="8.4")
+    root = _site331(host, "p331rr", kind="php", address="rr." + _DOM331, php_version="8.4")
+    static = _site331(host, "p331rs", kind="static", address="rs.%s/docs" % _DOM331)
+    app = _site331(host, "p331ra", kind="app", address="ra." + _DOM331, runtime="node", runtime_version="22", app_port=3000)
+    ids, image = (1000, 1000), "x/n@sha256:" + "7" * 64
+    conf = {}
+    for s in (php, root, static, app):
+        files = _ws331.site_files(s, ids, "none", _TOKEN331, image=image)
+        conf[s.name] = files.get(_ws331.CONF + "/apache.conf") or files.get(_ws331.CONF + "/nginx.conf") or ""
+    vhost = {n: c[c.index("<VirtualHost"):c.index("</VirtualHost>")] for n, c in conf.items() if "<VirtualHost" in c}
+    eq("the site's own server, as the install writes it: Apache's virtual host names the visitor's https on 443 as "
+       "its own address for redirects it builds (DirectorySlash), the host the visitor asked for, never its port",
+       {n: ("    ServerName https://localhost:443\n" in v, "    UseCanonicalName Off\n" in v,
+            "    UseCanonicalPhysicalPort Off\n" in v) for n, v in vhost.items()},
+       {"p331rp": (True, True, True), "p331rr": (True, True, True)})
+    eq("the site's own server: nginx (a static site, a Node.js app's gate) builds no absolute redirect and no port",
+       {n: ("    absolute_redirect off;" in conf[n], "    port_in_redirect off;" in conf[n]) for n in ("p331rs", "p331ra")},
+       {"p331rs": (True, True), "p331ra": (True, True)})
+
+
 # ── 6. The pages ─────────────────────────────────────────────────────────────────────────────────
 def _s6_pages(host, su):
     forum = _db331.session.get(_Site331, _site_id331("p331forum"))
@@ -554,7 +609,9 @@ with _p9.app_context():
         for _sec331, _args331 in ((_s1_shape, ()), (_s1_model, (_host331,)), (_s1_migration, ()),
                                   (_s2_routes, (_host331, _far331, _su331)), (_s3_render, ()), (_s3_guard, ()),
                                   (_s4_helper, ()), (_s4_routes, (_host331, _su331)), (_s5_recipes, (_host331,)),
-                                  (_s5_servers, (_host331,)), (_s6_pages, (_host331, _su331)), (_s6_i18n, ())):
+                                  (_s5_servers, (_host331,)), (_s6_pages, (_host331, _su331)), (_s6_i18n, ()),
+                                  (_s3_bare, (_remote331("p331-bare", "198.51.100.33"),)),
+                                  (_s5_redirects, (_remote331("p331-redir", "198.51.100.34"),))):
             check("part331: %s ran to the end" % _sec331.__name__, _ran331(_sec331, *_args331), _ran331.last)
         eq("part331: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips331:], [])
     finally:

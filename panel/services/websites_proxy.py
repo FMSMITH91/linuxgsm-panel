@@ -49,7 +49,9 @@ SITES IN FOLDERS (services/website_folders)
     `handle` per folder, the longest folder first (a folder never holds another site's, but the order is still
     written out, not left to Caddy's sorting of named matchers), each matching the folder itself and everything
     under it (`path /forums /forums/*`, so /forumsx is not the folder's), then the root site's `handle`, or a 404
-    when no site holds the root. The prefix is KEPT, never stripped: each site's own server maps its folder to its
+    when no site holds the root. The folder without its slash (/forums) is answered here with a 308 to /forums/
+    (a path, so the browser keeps its own scheme and host; the query kept): the site's own server would build
+    that redirect from its inside port (http://<domain>:8080/forums/). The prefix is KEPT, never stripped: each site's own server maps its folder to its
     files (services/websites: an Alias in Apache, an alias in nginx) and each app is told it (its URLs and cookie
     path, websites_recipes), so redirects, links and cookies name the folder the browser asked for. A runtime app
     gets the folder too and is told so on its Domains tab. The certificate is the domain's: the root site's
@@ -565,6 +567,17 @@ def _indented(lines):
     return ["\t" + ln if ln else ln for ln in lines]
 
 
+def _bare_folder_lines(site, folder):
+    """The folder asked for without its slash (/forums): a 308 to /forums/, query kept, before the site sees it.
+
+    The site's own server would answer it with a redirect built from its inside address (Apache's DirectorySlash
+    named http://<domain>:8080/forums/). The Location is a path, so the browser keeps the scheme and the host it
+    asked; 308 keeps the method and body. A banned visitor's 403 still comes first (`order error first`).
+    """
+    bare = "@lgsmbare%d" % site.id
+    return ["\t\t%s path %s" % (bare, folder), "\t\tredir %s %s/{?query} 308" % (bare, folder)]
+
+
 def _folder_handles(entries, opts, mode, guard, numbers):
     lines = []
     for row, site, token in entries:
@@ -572,7 +585,8 @@ def _folder_handles(entries, opts, mode, guard, numbers):
         if _path(row):
             matcher = "@lgsmfolder%d" % site.id
             lines += ["\t# site %s (%s) in %s" % (site.id, site.name, _path(row)),
-                      "\t%s path %s %s/*" % (matcher, _path(row), _path(row)), "\thandle %s {" % matcher] + body + ["\t}"]
+                      "\t%s path %s %s/*" % (matcher, _path(row), _path(row)), "\thandle %s {" % matcher]
+            lines += _bare_folder_lines(site, _path(row)) + body + ["\t}"]
         else:
             lines += ["\t# site %s (%s)" % (site.id, site.name), "\thandle {"] + body + ["\t}"]
     if all(_path(row) for row, _s, _t in entries):

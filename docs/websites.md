@@ -349,9 +349,12 @@ How it works:
 
 - The web proxy gives the domain one block with a route per folder, the longest first, then the site at
   the root (or "not found" when no site holds the root). It works the same in Public, Restricted and Tunnel
-  mode, and the certificate is the domain's (the root site's, when there is one).
+  mode, and the certificate is the domain's (the root site's, when there is one). The folder without its
+  slash (`example.org/forums`) is sent on to `example.org/forums/` by the web proxy itself, with the same
+  address, https and any query kept.
 - The folder stays in the path: each site's own server maps it to its files (Apache for PHP sites, nginx
-  for static sites), so links, redirects and cookies name the folder the visitor asked for. A Node.js app
+  for static sites), so links, redirects and cookies name the folder the visitor asked for. A redirect
+  Apache or nginx makes itself names the visitor's address over https, never their inside port. A Node.js app
   is sent the whole path: set its base path to the folder.
 - The apps are installed for the folder: WordPress's address (WordPress Address and Site Address, from
   which it sets its cookie paths), phpBB's script path and cookie path, MyBB's board URL and cookie path,

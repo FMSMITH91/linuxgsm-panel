@@ -441,7 +441,7 @@ def nginx_conf(token, upstream_port=None, base=""):
     base = _base(base)
     lines = ["# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
              "server {", "    listen %d;" % INNER_PORT, "    server_name _;", "    server_tokens off;",
-             "    absolute_redirect off;", "    client_max_body_size 0;",
+             "    absolute_redirect off;", "    port_in_redirect off;", "    client_max_body_size 0;",
              '    if ($http_x_panel_proxy_token != "%s") {' % token, "        return 403;", "    }"]
     if upstream_port is None:
         lines += ["    root %s;" % DOCROOT["static"], "    index index.html index.htm;",
@@ -479,7 +479,14 @@ def apache_conf(token, base=""):
         "<IfModule !headers_module>", "    LoadModule headers_module /usr/lib/apache2/modules/mod_headers.so",
         "</IfModule>", "<IfModule !rewrite_module>",
         "    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so", "</IfModule>",
-        "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP] + alias + [
+        "<VirtualHost *:%d>" % INNER_PORT,
+        # A redirect Apache builds to itself (DirectorySlash's /forums -> /forums/) named its inside port and
+        # scheme (http://<domain>:8080/forums/): the port of `*:8080` is the virtual host's own. Every visitor
+        # reaches a site over HTTPS on 443 (the web proxy, or the tunnel's provider), so that is the server's
+        # name for such URLs (Apache's ServerName docs, for a server behind a proxy that holds the TLS), and the
+        # host is the one the visitor asked for (UseCanonicalName Off), never a port of this container.
+        "    ServerName https://localhost:443", "    UseCanonicalName Off", "    UseCanonicalPhysicalPort Off",
+        "    DocumentRoot %s" % DOCROOT_PHP] + alias + [
         # The gate before authorization and before any .htaccess (THE PROXY TOKEN): [NV] keeps the header's name
         # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here. The <If> below reads
         # it with req_novary() for the same reason: %{HTTP:...} in an expression adds the header's name to Vary, and
