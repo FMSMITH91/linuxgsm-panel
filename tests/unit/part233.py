@@ -412,10 +412,10 @@ def _text233():
 
 def _js_docs233():
     js = _read233("panel", "static", "js", "settings.js")
-    hook = js[js.find("#sec-outside input[data-confirm-off]"):]
+    hook = js[js.find("getElementById('sec-outside')"):]
     check("settings.js: a switch that asks puts itself back on and goes off only from the dialog's Confirm, and "
-          "its outside-OWASP note follows it",
-          "box.checked = true;" in hook and "onConfirm: function(){ box.checked = false; sync(); }" in hook
+          "its outside-OWASP note follows it (every switch's note does: part324 flips one that does not ask)",
+          "box.hasAttribute('data-confirm-off')" in hook and "box.checked = true;" in hook and "onConfirm: function(){ box.checked = false; sync(); }" in hook
           and "note.classList.toggle('d-none', box.checked)" in hook
           and hook.find("box.checked = true;") < hook.find("confirmDialog("), hook[:400])
     check("server_workshop.js: titles switched off are said to be off, not that Steam did not answer",
