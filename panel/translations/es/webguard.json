@@ -13,7 +13,8 @@
   "First ban (minutes)": "Primer bloqueo (minutos)",
   "Longest ban (hours)": "Bloqueo más largo (horas)",
   "Never block, one address or network per line": "No bloquear nunca, una dirección o red por línea",
-  "No visitor is blocked.": "No hay ningún visitante bloqueado.",
+  "No visitor is blocked on this host.": "Ningún visitante está bloqueado en este host.",
+  "No visitor that attacked this website is blocked. {n} address(es) that attacked another website on this host are blocked from this one too.": "Ningún visitante que atacó este sitio web está bloqueado. {n} dirección(es) que atacaron otro sitio web de este host también están bloqueadas en este.",
   "OWASP gives no number.": "OWASP no da ningún número.",
   "OWASP gives no number: a limit of attempts within a window.": "OWASP no da ningún número: un límite de intentos dentro de una ventana de tiempo.",
   "OWASP gives no number: the observation window.": "OWASP no da ningún número: la ventana de observación.",
@@ -46,5 +47,6 @@
   "{domain} stays automatic: {why}": "{domain} sigue en automático: {why}",
   "{field} is a whole number from {low} to {high}.": "{field} es un número entero de {low} a {high}.",
   "{ip} is no longer blocked.": "{ip} ya no está bloqueada.",
+  "{n} more address(es) that attacked another website on this host are blocked from this one too.": "{n} dirección(es) más que atacaron otro sitio web de este host también están bloqueadas en este.",
   "{value} is not an address or network, like 203.0.113.7 or 2001:db8::/48.": "{value} no es una dirección ni una red, como 203.0.113.7 o 2001:db8::/48."
 }

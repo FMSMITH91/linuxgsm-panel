@@ -3828,8 +3828,15 @@ def _web_guard_files(guard, pw):
     _web_deny_modes(pw.pw_gid)
 
 
-def _web_f2b_reload():
-    """fail2ban reloaded: "yes", "no", or "absent" when fail2ban is not installed."""
+def _web_f2b_reload(restart=()):
+    """fail2ban reloaded, then each jail of `restart` restarted: "yes", "no", or "absent" when it is not installed.
+
+    `fail2ban-client reload` re-reads every jail's settings but keeps the actions a running jail has, so a jail whose
+    action list changed (the firewall ban added or taken away by a change of exposure mode) is restarted with
+    `reload --restart --if-exists <jail>` (fail2ban 1.x): its actions stop (the deny list's entries of that jail go,
+    by the action's actionflush) and start again with the new list, and its live bans are restored from fail2ban's
+    database. Only the websites' own jails are ever named here.
+    """
     try:
         rc, _out = _run_quiet([resolve(F2B), "reload"], timeout=60)
         for jail in restart:
@@ -3949,7 +3956,7 @@ def web_guard_events_after(lines, after):
     """The events of `lines` numbered after `after`, as (seq, epoch, kind, ip, jail, host); malformed lines left out."""
     out = []
     for line in lines:
-        m = re.fullmatch(r"([0-9]{1,12}) ([0-9]{1,12}) (ban|unban|release|flush) ([0-9a-f:.]{2,45}|-) "
+        m = re.fullmatch(r"([0-9]{1,12}) ([0-9]{1,12}) (ban|unban|lift|release|flush) ([0-9a-f:.]{2,45}|-) "
                          r"(lgsm-web-login|lgsm-web-scan|-) ([a-z0-9.-]{1,253})", line.strip())
         if m and int(m.group(1)) > after:
             out.append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4), m.group(5), m.group(6)))

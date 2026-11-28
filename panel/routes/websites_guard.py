@@ -154,8 +154,10 @@ def register(app):
         if not ok:
             return _w.say(502, got)
         mine = site_entries(site, got)
+        # The other addresses the host blocks (they attacked another site) are kept off this one too: counted, never
+        # named, as this site's users may not see another site's visitors.
         return jsonify({"success": True, "entries": [_entry_json(e) for e in mine], "count": len(mine),
-                        "guard": guard_json(site.remote_id)})
+                        "others": len(got) - len(mine), "guard": guard_json(site.remote_id)})
 
     @app.route("/websites/<int:site_id>/blocked/unban", methods=["POST"])
     @login_required
