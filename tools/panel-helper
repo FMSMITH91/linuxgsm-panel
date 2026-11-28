@@ -3159,8 +3159,32 @@ def _web_running():
 _WEB_PREFIXES = re.compile(r"^(?:Error: |loading (?:new |initial )?config: |adapting config using caddyfile: )+")
 
 
+# A Go value printed into an error (`&logging.FileWriter{Filename:..., Roll:(*bool)(nil), ...}`): no words for a person.
+_WEB_GO_VALUE = re.compile(r"&?[A-Za-z_][A-Za-z0-9_.]*\{[^{}]*\}")
+
+
+def web_error_cause(text):
+    """A Go error chain ("a: b: c: d") without its printed Go values, cut to its first clause and its cause ("a: c: d").
+
+    The cause (the last two clauses: what failed on what, and why) is what a person can act on; the clauses between
+    are the program's own steps. The whole line stays in the panel's log (website-proxy-apply's detail= lines).
+    """
+    prev = None
+    while prev != text:
+        prev, text = text, _WEB_GO_VALUE.sub("", text)
+    parts = [p.strip() for p in text.split(": ") if p.strip()]
+    return ": ".join([parts[0]] + parts[-2:] if len(parts) > 3 else parts)
+
+
+def _web_cut(text, size=200):
+    """`text` at most `size` characters, cut after a whole word with an ellipsis when it is longer."""
+    if len(text) <= size:
+        return text
+    return text[:size - 1].rsplit(" ", 1)[0].rstrip(" :,") + "\u2026"
+
+
 def web_plain_error(line):
-    """One of the proxy's error lines in plain words: its JSON log record's message, no file path, no JSON."""
+    """One of the proxy's error lines in plain words: its JSON log record's message, no file path, no JSON, no Go value."""
     text = (line or "").strip()
     if text.startswith("{"):
         try:
@@ -3173,7 +3197,7 @@ def web_plain_error(line):
     if busy:
         return "another program already listens on %s" % busy.group(1)
     text = re.sub(r"(?:/etc/lgsm-web-proxy/)?Caddyfile(?:\.candidate)?:([0-9]+)", r"line \1", _WEB_PREFIXES.sub("", text))
-    return "".join(c for c in text if c.isprintable())[:200].strip()
+    return _web_cut(web_error_cause("".join(c for c in text if c.isprintable()).strip()))
 
 
 def _web_last_error(since):

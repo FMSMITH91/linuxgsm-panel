@@ -386,6 +386,22 @@ _CADDY_RAW322 = ('Error: loading initial config: loading new config: setting up 
                  'RollAt:[]string(nil), RollKeep:2, RollKeepDays:2}: mkdir /var/log/lgsm-web-proxy: permission denied')
 
 
+def _s7_plain(st):
+    from panel.core import i18n
+    out = "valid=no\nerror=%s\ndetail=%s\n" % (_H322.web_plain_error(_CADDY_RAW322), _CADDY_RAW322)
+    _p9_patch(_sw322, "_helper", lambda remote, verb, args=(), timeout=120, doc=None: (False, out))
+    ok, said = _sw322.proxy_apply(st.host, _H322.WEB_CONF_HEAD + "\n", [], None)
+    text = i18n.tr(said)
+    eq("web proxy apply (ssh_manager.proxy_apply over the helper's refusal): Caddy's error reads as its first clause and "
+       "its cause, no Go value dumped and never cut mid-word; the raw line is only in the panel's log",
+       (ok, "&logging" in text or "Roll" in text, text.endswith("setting up custom log 'lgsmsec3_0': mkdir "
+                                                                "/var/log/lgsm-web-proxy: permission denied")),
+       (False, False, True))
+    eq("web proxy apply (control): a Caddyfile error keeps its line and its words",
+       _H322.web_plain_error("Error: adapting config using caddyfile: Caddyfile.candidate:12 - Error during parsing: "
+                             "unrecognized directive: foo"), "line 12 - Error during parsing: unrecognized directive: foo")
+
+
 # ── 2. The security logger is mapped to the block's names ──────────────────────────────────────────
 def _caddy322(text):
     """Caddy's adapter and request logging, modelled: {host: (block body, [logger names mapped])}, skip_unmapped.
@@ -615,7 +631,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends):
+        for _sec322 in (_s2_mapped, _s4_unblock, _s6_ends, _s7_plain):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

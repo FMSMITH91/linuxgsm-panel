@@ -442,7 +442,7 @@ def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
         return True, OK_APPLIED
     if out in (ONLY_LOCAL, NO_HELPER):
         return False, out
-    _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-600:])
+    _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-2400:])     # detail= is the whole line
     return False, apply_refusal(out)
 
 
