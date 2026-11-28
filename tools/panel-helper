@@ -3220,7 +3220,9 @@ def do_website_proxy_apply(args, content):
     <program>): nothing changes. The candidate is checked with `caddy validate` run as WEB_PROXY_USER;
     only one that passes replaces the running file (os.replace). Then the proxy is enabled and restarted
     (`admin off` leaves no API to reload through, and a restart is what loads a changed file), whatever
-    the argument (start, reload): an apply that leaves it running leaves it enabled. Success is printed
+    the argument (start, reload): an apply that leaves it running leaves it enabled. While the page cache
+    is on, both the running file and the new one hold the admin socket, and an unchanged unit, it is
+    reloaded through the socket instead (_web_admin_load: no restart, its connections kept). Success is printed
     only when the unit is really running afterwards (_web_running); otherwise the previous file is put
     back and the journal's last error line is printed in plain words (applied=no, error=).
     """
@@ -3322,6 +3324,31 @@ def _web_admin_purge(pattern):
     return re.match(rb"HTTP/1\.[01] 2[0-9][0-9] ", head) is not None
 
 
+def web_reloadable(old, new):
+    """Whether the running configuration `old` can take `new` through the admin socket: both hold its line (bytes)."""
+    line = ("\n\tadmin unix/%s|0200\n" % WEB_PROXY_ADMIN).encode()
+    return old is not None and new is not None and line in old and line in new
+
+
+def _web_admin_load(text):
+    """POST the Caddyfile `text` (bytes) to the proxy's /load over the admin socket: True when it answered 2xx.
+
+    Caddy adapts and loads it in place (its admin API's /load, Content-Type text/caddyfile); a unix socket's admin
+    endpoint takes any Host. Anything else (no socket, a refusal, no answer in time) is False: the caller restarts.
+    """
+    head = ("POST /load HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/caddyfile\r\nContent-Length: %d\r\n"
+            "Connection: close\r\n\r\n" % len(text)).encode("ascii")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(60)
+            conn.connect(WEB_PROXY_ADMIN)
+            conn.sendall(head + text)
+            answer = conn.recv(64)
+    except OSError:
+        return False
+    return re.match(rb"HTTP/1\.[01] 2[0-9][0-9] ", answer) is not None
+
+
 def _web_purge(content):
     try:
         domains = _web_purge_doc(content)
@@ -3372,6 +3399,7 @@ def _web_units_current():
             changed = True
     if changed:
         _run_quiet([resolve("systemctl"), "daemon-reload"], timeout=60)
+    return changed
 
 
 def web_rebound(conf, addrs):
@@ -3408,13 +3436,22 @@ def do_website_proxy_rebind(args, content):
 
 
 def _web_start(old, pw):
-    """Enable and restart the proxy on the new file; when it does not stay running, put `old` back. 0 or 1."""
+    """Enable and restart the proxy on the new file; when it does not stay running, put `old` back. 0 or 1.
+
+    A running proxy whose unit is unchanged, and whose running and new files both hold the admin socket (the page
+    cache is on), loads the new file through the socket instead (web_reloadable, _web_admin_load): its process,
+    connections and page cache stay. A load the proxy refuses falls back to the restart.
+    """
     was_active = _web_unit_state()[0] == "active"
     since = int(time.time()) - 1
     systemctl = resolve("systemctl")
-    _web_units_current()
+    units_changed = _web_units_current()
     _run_quiet([systemctl, "enable", WEB_PROXY_UNIT], timeout=60)
     _run_quiet([systemctl, "enable", "--now", WEB_REBIND_TIMER], timeout=60)
+    new = _web_read(WEB_PROXY_CONF)
+    if was_active and not units_changed and web_reloadable(old, new) and _web_admin_load(new) and _web_running():
+        sys.stdout.write("applied=yes\nreloaded=yes\n")
+        return 0
     _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
     if _web_running():
         sys.stdout.write("applied=yes\n")

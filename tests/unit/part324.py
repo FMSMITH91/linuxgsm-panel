@@ -714,6 +714,30 @@ def _apply324(d, old_text, new_text, admin):
     return rc, out, [c for c in calls if c[:1] in (["restart"], ["reload"])], got.get("req", b"")
 
 
+def _s8_reload():
+    head = _H322.WEB_CONF_HEAD + "\n{\n%s\n\tpersist_config off\n}\n"
+    sock_line = "\tadmin unix/%s|0200"
+    d = _tf324.mkdtemp(prefix="p324a-", dir="/tmp")         # a unix socket's path must stay short
+    try:
+        line = sock_line % os.path.join(d, "admin.sock")
+        cache_on = head % line + "a.example.org {\n\trespond 200\n}\n"
+        cache_on2 = head % line + "b.example.org {\n\trespond 200\n}\n"
+        on = _apply324(d, cache_on, cache_on2, True)
+        os.path.exists(os.path.join(d, "admin.sock")) and os.unlink(os.path.join(d, "admin.sock"))
+        off = _apply324(d, head % "\tadmin off" + "a.example.org {\n}\n", head % "\tadmin off" + "b.example.org {\n}\n",
+                        False)
+    finally:
+        _shutil324.rmtree(d, ignore_errors=True)
+    eq("web proxy apply (helper website-proxy-apply, the page cache's admin socket in the running and the new "
+       "configuration): the new file is loaded through the socket (POST /load, text/caddyfile), no restart, so the "
+       "page cache and the visitors' connections stay",
+       (on[0], "reloaded=yes" in on[1], on[2], on[3].startswith(b"POST /load HTTP/1.1"),
+        b"Content-Type: text/caddyfile" in on[3], on[3].endswith(cache_on2.encode())),
+       (0, True, [], True, True, True))
+    eq("web proxy apply (control: no admin socket, the page cache off): restarted as before",
+       (off[0], "reloaded=yes" in off[1], off[2]), (0, False, [["restart", "lgsm-web-proxy.service"]]))
+
+
 def _cleanup324():
     _db324.session.rollback()
     remotes = _ROWS324["remotes"] or [0]
@@ -765,6 +789,7 @@ _PAGES324 = (
     _s6_badge,
     _s7_proxy_card,
     _s7_unblock_asks,
+    _s8_reload,
 )
 _HOST324 = (
     _s1_until,
