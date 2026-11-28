@@ -54,10 +54,10 @@ WHY_OTHER = ("On by default, as OWASP recommends: LinuxGSM installs this game's 
              "project. Switch it off if a release ever breaks your mods.")
 
 _STATE_RE = re.compile(r"^\s*(No update|Update) available\s*$", re.M)
-_TOKEN = r"([A-Za-z0-9][A-Za-z0-9._+:-]{0,63})\s*$"
-_LOCAL_RE = re.compile(r"^\s*\*\s*Local build:\s*" + _TOKEN, re.M)
-_REMOTE_RE = re.compile(r"^\s*\*\s*Remote build:\s*" + _TOKEN, re.M)
-_BRANCH_RE = re.compile(r"^\s*\*\s*Branch:\s*" + _TOKEN, re.M)
+_BUILD_WORD = r"([A-Za-z0-9][A-Za-z0-9._+:-]{0,63})\s*$"
+_LOCAL_RE = re.compile(r"^\s*\*\s*Local build:\s*" + _BUILD_WORD, re.M)
+_REMOTE_RE = re.compile(r"^\s*\*\s*Remote build:\s*" + _BUILD_WORD, re.M)
+_BRANCH_RE = re.compile(r"^\s*\*\s*Branch:\s*" + _BUILD_WORD, re.M)
 _STEAMDB_RE = re.compile(r"https://steamdb\.info/app/([0-9]{1,10})/history")
 
 
