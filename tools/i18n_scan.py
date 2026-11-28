@@ -2421,7 +2421,6 @@ def literal_gaps_py(lang, root=ROOT, translation_dir=TRANSLATION_DIR):
 
 
 def _main():
-    import sys
     show_all = "--all" in sys.argv
     found, dynamic = scan_templates()
     catalog = load_catalog("es")
