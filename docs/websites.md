@@ -9,7 +9,8 @@ account on the host, and one web proxy on the host serves every site and gets th
 
 Not included: mail, DNS hosting, FTP accounts (use the panel's [SFTP service](sftp.md)), and a web
 application firewall. Without mail, an app's "forgot password" email cannot be sent: an administrator
-resets the password from the app's own admin page instead.
+resets the password from the app's own admin page instead, and a WordPress administrator's password can be reset
+from the site's Overview (see [Forgot the admin password](#forgot-the-admin-password)).
 
 ## Adding a website
 
@@ -87,6 +88,23 @@ and that nothing was left on the host, with **Try again**, which brings the form
 server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
 site stays in the list, and deleting it tries again. New app versions arrive through the
 signed catalog, like add-on updates: see [New app versions](#new-app-versions).
+
+### Forgot the admin password
+
+A WordPress site's Overview has **Reset admin password** for whoever runs the site. After your panel password
+check it lists the site's WordPress administrators; pick one, and press **Set the new password**. Leave the
+password empty and the panel makes a 24-character one, shown once, as dots until you press Show (Copy copies it
+without showing it; a shown password hides again after 30 seconds, or when you leave the tab). A password you
+type needs 15 to 128 characters and is not shown back. You can set the administrator's email in the same step:
+an address that receives mail lets WordPress's own "Lost your password?" work later.
+
+The panel runs WordPress's own command-line tool (wp-cli) in a one-off locked-down container as the site's
+account, with plugins and themes not loaded: the administrator's name, the password and the email reach it as
+files only the site's account can read, never on a command line or in a log. Only an account with the
+administrator role can be changed, and it is signed out of WordPress everywhere. The panel never stores the
+password; the audit log records who reset which administrator of which site, and whether the email changed,
+never the password or the address. For phpBB, Drupal, MyBB and SMF the card says to use the app's own "Forgot
+password" link, which needs the site to send mail.
 
 ## New app versions
 

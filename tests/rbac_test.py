@@ -4454,6 +4454,9 @@ _NO_AUDIT_OK = {
     # A Telegram link code for the caller's own account: a 10-minute, single-use code that changes
     # nothing by itself. The link it may lead to is audited when a chat claims it (telegram_link.link).
     "account_telegram_link",
+    # A WordPress site's administrators' logins read for the Reset admin password form (a POST for the password
+    # check; nothing changes). The reset it leads to is audited (website_app_admin_password).
+    "website_app_admins",
     # The Databases manager: one whole value read for the page (a POST so the row's key is never in a URL;
     # opening the table was audited), one piece of a dump upload (its finish audits what became of it:
     # restored, or refused and why), and a cancel that removes the part file nothing lists.
