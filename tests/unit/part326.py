@@ -1,4 +1,4 @@
-"""Part 326 of the unit suite: two leads a host's proof of the Updates and Websites work turned up.
+"""Part 326 of the unit suite: three leads a host's proof of the Updates and Websites work turned up.
 
 1. The nightly window reads a server's crontab itself (as the game account) before it updates the server's game: a
    server whose own scheduled task runs `update` is left to that task even when nothing read the crontab since the
@@ -9,6 +9,7 @@
    account: another server's UDP query socket on a Minecraft server's TCP port is no clash, and another account's TCP
    listener there is refused naming that account. Both reads of the host's sockets (the port scan and the host sample
    that shares it) carry each socket's protocol.
+3. Turning "Page cache in the web proxy" off is applied at once: the proxy loads its configuration without the cache.
 
 HOW IT RUNS. Through part12's app (its tripwire armed): the window by updates_auto.tick, the Start by its route over a
 stand-in host that runs the panel's real awk over fixture `ss -e` lines, the cache switch by its route.
@@ -244,6 +245,58 @@ def _s2_port(host, su):
        (gmod[0], gmod[1], "the 'p326pmc' account" in gmod[2], gmod[3]), (False, True, True, []))
 
 
+# ── 3. Page cache turned off: applied at once ──────────────────────────────────────────────────────
+def _site326(host, name):
+    s = _Site326(remote_id=host.id, name=name, state="running", enabled=True, kind="static",
+                 proxy_secret=_cfg326.encrypt_secret(_TOKEN326))
+    _db326.session.add(s)
+    _db326.session.flush()
+    s.account, s.port = "ws%d" % s.id, 20900 + s.id % 90
+    _db326.session.add(_Dom326(website_id=s.id, domain="%s.example.org" % name, is_primary=True,
+                               verified_at=_utcnow326(), dns_state="matching"))
+    _db326.session.commit()
+    _ROWS326["sites"].append(s.id)
+    return s
+
+
+def _s3_cache_off(host, su):
+    _site326(host, "p326site")
+    row = _w326.proxy_row(host.id)
+    row.installed_version = "2.11.9"
+    _db326.session.commit()
+    loaded, threads = [], []
+    _p9_patch(_sw326, "proxy_status", lambda remote, proxy=None: (True, "installed=yes\nversion=v2.11.9\ncache=yes\n"))
+    _p9_patch(_sw326, "ports_apply", lambda remote, proxy, enabled: (True, "ok"))
+    _p9_patch(_sw326, "proxy_apply", lambda remote, text, sites=(), proxy=None, start_it=False:
+              loaded.append(text) or (True, "ok"))
+
+    class _Thread326:
+        def __init__(self, target=None, args=(), daemon=None):
+            self.args = args
+
+        def start(self):
+            threads.append(self.args[1])
+    _p9_patch(_wpx326, "threading", type("_T", (), {"Thread": _Thread326}))
+    _cfg326.update_config(lambda cfg: cfg.update(websites_cache_build=True))
+    try:
+        off = _client326(su.id).post("/websites/proxy/options", json={"options": {"cache_build": False}})
+        off_loaded = list(loaded)
+        del loaded[:]
+        again = _client326(su.id).post("/websites/proxy/options", json={"options": {"cache_build": False}})
+        again_loaded = list(loaded)
+        on = _client326(su.id).post("/websites/proxy/options", json={"options": {"cache_build": True}})
+    finally:
+        _cfg326.update_config(lambda cfg: cfg.pop("websites_cache_build", None))
+    eq("web proxy options (POST /websites/proxy/options, page cache turned off): applied at once, the proxy loads its "
+       "configuration without the cache and its admin socket",
+       (off.status_code, _p9_json(off).get("message"), len(off_loaded),
+        all("\tadmin off" in t and "admin unix/" not in t for t in off_loaded)),
+       (200, _wpx326.S_APPLIED, 1, True))
+    eq("web proxy options (controls: saved again unchanged, nothing applied; turned on, the build starts and the save "
+       "itself loads nothing)", (again.status_code, again_loaded, on.status_code, threads, loaded),
+       (200, [], 200, [host.id], []))
+
+
 def _cleanup326():
     _db326.session.rollback()
     remotes = _ROWS326["remotes"] or [0]
@@ -289,7 +342,7 @@ with _p9.app_context():
         _p9_arm(who="part326")
         _cfg326.update_config(lambda cfg: cfg.update({_u326.CFG: {"start": "04:00", "end": "05:00", "off": []}}))
         _host326r, _su326 = _setup326()
-        for _sec326 in (_s1_window, _s1_row, _s2_port):
+        for _sec326 in (_s1_window, _s1_row, _s2_port, _s3_cache_off):
             check("part326: %s ran to the end" % _sec326.__name__, _ran326(_sec326, _host326r, _su326), _ran326.last)
         eq("part326: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips326:], [])
     finally:
