@@ -11,4 +11,4 @@
 # semgrep-pins: wcmatch~=8.3
 # 11.2 is the first release with GHSA-53pm-wgxf-c6qf fixed (polynomial-time matching of names
 # against multi-star patterns); below 12 so a new major is looked at before the scan runs on it.
-wcmatch>=11.2,<12
+wcmatch>=12.0.4,<13
