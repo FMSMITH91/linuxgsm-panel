@@ -208,7 +208,16 @@ def enabled(proxy):
 
 # ── the proxy's lines ────────────────────────────────────────────────────────────────────────────
 def _security_log(name):
-    return ["\tlog %s {" % name, "\t\tno_hostname", "\t\toutput file %s {" % SECURITY_LOG, "\t\t\troll_size 10MiB",
+    """The block's security logger, mapped to the block's names (never `no_hostname`).
+
+    The proxy decides whether a request is logged at all before any handler runs, by its Host: a host no logger is
+    mapped to is not logged, and a `log_name` cannot bring it back (with a catch-all block in the configuration, the
+    server skips unmapped hosts). A security logger with `no_hostname` on a site without its own access log was
+    mapped to nothing, so no watched request was ever written and nothing was banned. Mapped, it would also receive
+    every other request of the block: those are skipped (`log_skip @lgsmquiet`) or, with the site's access log on,
+    named to the access logger alone (`log_name @lgsmquiet`).
+    """
+    return ["\tlog %s {" % name, "\t\toutput file %s {" % SECURITY_LOG, "\t\t\troll_size 10MiB",
             "\t\t\troll_keep 2", "\t\t\troll_keep_for 48h", "\t\t\tmode 0600", "\t\t}", "\t\tformat filter {",
             "\t\t\twrap json {", "\t\t\t\ttime_format iso8601", "\t\t\t}"] + [
         "\t\t\t%s delete" % f for f in ("request>remote_ip", "request>remote_port", "request>proto", "request>uri",
@@ -224,20 +233,26 @@ def _watch_matchers(deny_paths):
     return lines
 
 
-def _quiet_matcher(deny_paths):
-    """Every request the guard does not watch: skipped by every logger (the site has no access log of its own)."""
+def _quiet_matcher(deny_paths, access):
+    """Every request the guard does not watch: kept out of the security log the block's names map to.
+
+    With the site's access log off it is skipped by every logger; on (`access`, its logger's name), it is written by
+    that logger alone.
+    """
     lines = ["\t@lgsmquiet {", "\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % " ".join(LOGIN_PATHS), "\t\t}"]
     for path, query in LOGIN_QUERIES:
         lines += ["\t\tnot {", "\t\t\tmethod POST", "\t\t\tpath %s" % path, "\t\t\tquery %s" % query, "\t\t}"]
-    return lines + ["\t\tnot path %s" % " ".join(list(SCAN_PATHS) + list(deny_paths)), "\t}", "\tlog_skip @lgsmquiet"]
+    return lines + ["\t\tnot path %s" % " ".join(list(SCAN_PATHS) + list(deny_paths)), "\t}",
+                    "\tlog_name @lgsmquiet %s" % access if access else "\tlog_skip @lgsmquiet"]
 
 
 def guard_lines(site_id, block, deny_paths, access_log):
     """A site block's guard: the deny list's 403, the watched requests to the security log, tagged.
 
-    `block` numbers the site's blocks (one per certificate source), so each logger name is its own. With the site's
-    access log on, its logger is named too (access_name) and a watched request goes to both; with it off, every
-    other request is skipped by every logger.
+    `block` numbers the site's blocks (one per certificate source), so each logger name is its own. The security
+    logger is mapped to the block's names (_security_log). With the site's access log on, its logger is named too
+    (access_name): a watched request goes to both, every other request to the access logger alone; with it off,
+    every other request is skipped by every logger.
     """
     sec = "lgsmsec%d_%d" % (site_id, block)
     names = sec + (" " + access_name(site_id, block) if access_log else "")
@@ -245,8 +260,7 @@ def guard_lines(site_id, block, deny_paths, access_log):
     lines += _watch_matchers(deny_paths)
     for matcher, tag in (("lgsmlogin", "login"), ("lgsmlogin0", "login"), ("lgsmlogin1", "login"), ("lgsmscan", "scan")):
         lines += ["\tlog_name @%s %s" % (matcher, names), "\tlog_append @%s lgsm %s" % (matcher, tag)]
-    if not access_log:
-        lines += _quiet_matcher(deny_paths)
+    lines += _quiet_matcher(deny_paths, access_name(site_id, block) if access_log else None)
     return lines + _security_log(sec)
 
 

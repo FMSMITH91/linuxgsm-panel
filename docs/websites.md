@@ -220,7 +220,9 @@ What is counted, per address:
 Only those requests are written to the web proxy's security log (`/var/log/lgsm-web-proxy/security.log`,
 readable by root alone, kept two days), and only the time, the visitor's address, the method, the site's
 name and the answer's status: no path, query, header or cookie. Every other request is logged only where a
-site's own access log is on, as before.
+site's own access log is on, as before (a blocked visitor's refused requests are written to the security log
+too, with the same few fields). The log's folder is made, the web proxy's own, before the proxy checks a new
+configuration, and each site's names are tied to its security log whether or not its access log is on.
 
 Settings, per host, under **Blocked visitors** on the web proxy's card (superadmin): blocking on or off,
 the two limits, the window, the first ban (10 minutes by default, OWASP's example of a fixed lockout), a ban

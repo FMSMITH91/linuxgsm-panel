@@ -303,6 +303,28 @@ def _logged322(model, host, watched):
     return named.group(1).split() if named else mapped
 
 
+def _s2_mapped(st):
+    from panel.routes import websites as _w
+    from panel.services import websites_proxy as _wp
+    quiet, logged = _site322(st, "p322q", enabled=True), _site322(st, "p322l", enabled=True, access_log=True)
+    row = _w.proxy_row(st.host.id)
+    row.exposure_mode, row.guard = "public", "{}"
+    _db322.session.commit()
+    model = _caddy322(_wp.render([quiet, logged], row, {}, secret_of=lambda s: _TOKEN322))
+    q, lg = "p322q.example.org", "p322l.example.org"
+    sec_q, sec_l, acc_l = "lgsmsec%d_0" % quiet.id, "lgsmsec%d_0" % logged.id, "lgsmacc%d_0" % logged.id
+    eq("blocked visitors (render, a site with no access log of its own): its names map to its security logger, so a "
+       "sign-in POST is written to the security log (with `no_hostname` the proxy skipped the host before any "
+       "handler and nothing was ever banned); every other request is written nowhere",
+       (_logged322(model, q, True), _logged322(model, q, False)), ([sec_q], []))
+    eq("blocked visitors (render, control: a site with its access log on): a sign-in POST goes to both loggers, every "
+       "other request to its access log alone (masked), never to the security log",
+       (sorted(_logged322(model, lg, True)), _logged322(model, lg, False)), (sorted([sec_l, acc_l]), [acc_l]))
+    for s in (quiet, logged):
+        s.enabled = False
+    _db322.session.commit()
+
+
 # ── 8. The pages' scripts ────────────────────────────────────────────────────────────────────────
 def _node322(page, scripts, scenario, routes):
     """part301's node harness, with addEventListener on its elements (the Updates page wires its buttons that way)."""
@@ -452,7 +474,7 @@ with _p9.app_context():
         _p9_arm(who="part322")
         _p9_patch(_sw322, "site_probe", lambda remote, site: (False, "not read in part322"))
         _st322 = _rows322()
-        for _sec322 in ():
+        for _sec322 in (_s2_mapped,):
             check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322, _st322), _ran322.last)
         eq("part322: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips322:], [])
     finally:

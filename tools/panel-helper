@@ -3410,7 +3410,8 @@ def _web_validated(text, pw):
     if r.returncode != 0:
         os.unlink(cand)
         lines = [ln for ln in r.stderr.decode("utf-8", "replace").splitlines() if "error" in ln.lower()][-3:]
-        sys.stdout.write("valid=no\n" + "".join("error=%s\n" % web_plain_error(ln) for ln in lines))
+        sys.stdout.write("valid=no\n" + "".join("error=%s\n" % web_plain_error(ln) for ln in lines)
+                         + "".join("detail=%s\n" % "".join(c for c in ln if c.isprintable())[:1500] for ln in lines[-1:]))
         return False
     os.replace(cand, WEB_PROXY_CONF)
     return True
