@@ -14,4 +14,8 @@
 #     builds and minified *.min.* assets (https://docs.codacy.com/repositories-configure/ignoring-files/).
 #   * While this file exists, the "Ignored files" set in Codacy's UI do NOT apply. An exclusion
 #     has to be added here, with its reason, or it does not exist.
-exclude_paths: []
+# The one exclusion: a GENERATED npm lockfile, written by npm, no code. Codacy's Lizard reads its JSON as one
+# 4000-line "file of code" (file-nloc). Its content is checked where it matters: npm ci verifies every package's
+# sha512 integrity, osv-scanner (CI and local) and Dependabot watch its versions.
+exclude_paths:
+  - ".github/lhci/package-lock.json"
