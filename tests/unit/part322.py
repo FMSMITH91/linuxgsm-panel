@@ -530,9 +530,11 @@ def _s8_blocked_page():
   return {shown: shown, left: $('wv-list').children.length, n: $('wv-count').textContent, msg: $('wv-msg').textContent};
 """, routes)
     shown = got.get("shown") or {}
-    eq("Blocked visitors (js/website_blocked.js): each address says since when as well as until when",
-       ("since" in shown.get("text", "") and "2026-11-27 10:00:00 UTC" in shown.get("text", ""), got.get("error")),
-       (True, None))
+    text = shown.get("text", "")
+    eq("Blocked visitors (js/website_blocked.js): each address says since when as well as until when, to the minute, "
+       "the day and the zone said once when both share them (two short lines on a phone)",
+       ("since" in text, "2026-11-27 10:00" in text, "10:10 UTC" in text, text.count("2026-11-27"), text.count("UTC"),
+        got.get("error")), (True, True, True, 1, 1, None))
     eq("Blocked visitors (js/website_blocked.js): the host's other bans (they hold for this site too) are counted under "
        "the list, never named", "2 more address(es)" in shown.get("state", ""), True)
     eq("Blocked visitors (js/website_blocked.js, Unblock): the row is gone at once, the count follows, the answer kept",

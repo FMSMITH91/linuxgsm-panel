@@ -147,7 +147,7 @@
     if (r.action) ctl.appendChild(actionButton(r, out));
     if (r.later) ctl.appendChild(laterButton(r, out));
     if (r.auto_editable) ctl.appendChild(autoSwitch(r, out));
-    if (r.backup_post) ctl.appendChild(backupSwitch(r, out));
+    if (r.backup_post && r.auto) ctl.appendChild(backupSwitch(r, out));     // only the nightly window backs up first
     wrap.appendChild(ctl);
     if (r.auto_why) wrap.appendChild(line('info-circle', r.auto_why, 'text-secondary'));
     wrap.appendChild(out);

@@ -11,18 +11,35 @@
   function row(e) {
     var li = WS.node('li', 'ws-row');
     li.setAttribute('data-ip', String(e.ip || ''));
+    // One line for the address and why, one for when with Unblock at its end: a phone reads a ban in two lines.
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     top.appendChild(WS.raw('span', 'font-monospace text-break', String(e.ip || '')));
     top.appendChild(WS.raw('span', 'text-secondary', String(e.reason || '')));
     li.appendChild(top);
-    var when = WS.node('div', 'text-secondary');
-    when.appendChild(WS.node('span', null, WS.T('since')));
-    when.appendChild(WS.raw('span', 'ms-1 me-1 text-nowrap', String(e.since || '')));
-    when.appendChild(WS.node('span', null, WS.T('until')));
-    when.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(e.until || '')));
-    li.appendChild(when);
-    li.appendChild(WS.button(WS.T('Unblock'), 'unlock', 'wsUnblock', [String(e.ip || '')]));
+    var span = when(String(e.since || ''), String(e.until || ''));
+    var line = WS.node('div', 'd-flex flex-wrap align-items-center gap-1 small text-secondary');
+    line.appendChild(WS.node('span', null, WS.T('since')));
+    line.appendChild(WS.raw('span', 'text-nowrap', span[0]));
+    line.appendChild(WS.node('span', null, WS.T('until')));
+    line.appendChild(WS.raw('span', 'text-nowrap', span[1]));
+    var unblock = WS.button(WS.T('Unblock'), 'unlock', 'wsUnblock', [String(e.ip || '')]);
+    unblock.className += ' ms-auto';
+    line.appendChild(unblock);
+    li.appendChild(line);
     return li;
+  }
+  // "2026-11-27 10:00:00 UTC" and "2026-11-27 10:10:00 UTC" read as "2026-11-27 10:00" until "10:10 UTC": minutes
+  // (a ban is minutes long), the date once when both are the same day, the zone once when both share it.
+  function stamp(t) {                 // ["2026-11-27", "10:00:00", "UTC"], or null for another shape
+    var p = t.split(' ');
+    return p.length >= 2 && p[0].length === 10 && p[1].length === 8 ? p : null;
+  }
+  function when(since, until) {
+    var a = stamp(since), b = stamp(until);
+    if (!a || !b) return [since, until];
+    var za = a.slice(2).join(' '), zb = b.slice(2).join(' ');
+    return [a[0] + ' ' + a[1].slice(0, 5) + (za && za !== zb ? ' ' + za : ''),
+      (a[0] === b[0] ? '' : b[0] + ' ') + b[1].slice(0, 5) + (zb ? ' ' + zb : '')];
   }
   function stateText(g, n, others) {
     if (g && g.enabled === false) return WS.T('Blocking is off for this host (the web proxy card, Blocked visitors).');

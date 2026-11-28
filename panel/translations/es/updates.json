@@ -14,7 +14,6 @@
   "Automatic updates are off for it: it waits for Update now.": "Sus actualizaciones automáticas están desactivadas: espera a Actualizar ahora.",
   "Automatic updates are off for {n} item(s): {names}. Security updates still install in the nightly window; OWASP recommends leaving automatic updates on.": "Las actualizaciones automáticas están desactivadas para {n} elemento(s): {names}. Las actualizaciones de seguridad se instalan igualmente en la ventana nocturna; OWASP recomienda dejarlas activadas.",
   "Back up first at night": "Copia de seguridad antes, por la noche",
-  "Branch: {branch}.": "Rama: {branch}.",
   "By itself tonight at {at} (the host's clock), if no players are on.": "Por sí solo esta noche a las {at} (reloj del host), si no hay jugadores.",
   "By itself tonight at {at} (the host's clock).": "Sola esta noche a las {at} (reloj del host).",
   "By itself: its scheduled task runs update ({schedule}, the host's clock).": "Por sí solo: su tarea programada ejecuta update ({schedule}, reloj del host).",
@@ -97,5 +96,6 @@
   "{n} package(s), {sec} of them security updates.": "{n} paquete(s), {sec} de ellos de seguridad.",
   "{n} update(s) can run now without kicking players.": "{n} actualización(es) pueden ejecutarse ahora sin expulsar jugadores.",
   "{n} update(s) ready: {what}": "{n} actualización(es) lista(s): {what}",
+  "{old} to {new} (branch {branch}).": "De {old} a {new} (rama {branch}).",
   "{old} to {new}.": "De {old} a {new}."
 }

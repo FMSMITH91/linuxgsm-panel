@@ -82,9 +82,9 @@ def game_row(gs, got, cfg):
     """The row of server `gs`, whose last check found a newer build (`got`: game_updates.seen)."""
     from panel.routes.updates import _row
     auto = U.game_auto_on(gs, cfg)
-    what = [U.tr("{old} to {new}.", old=got.get("local") or "?", new=got.get("remote") or "?")]
-    if got.get("branch"):
-        what.append(U.tr("Branch: {branch}.", branch=got["branch"]))
+    old, new = got.get("local") or "?", got.get("remote") or "?"
+    what = [U.tr("{old} to {new} (branch {branch}).", old=old, new=new, branch=got["branch"]) if got.get("branch")
+            else U.tr("{old} to {new}.", old=old, new=new)]
     what.append(U.tr("LinuxGSM's check, {at} (the host's clock).", at=_checked_at(gs, got.get("at") or 0)))
     notes = ([{"title": "SteamDB", "url": "https://steamdb.info/app/%s/history" % got["appid"]}]
              if got.get("appid") else [])

@@ -135,10 +135,11 @@ def _s1_check(host, su):
     eq("game updates (the server page's check-update, POST /api/server/<id>/action): what it printed is the Updates "
        "page's game row: the installed and the available build, the branch, SteamDB's history, Update now and Update "
        "when empty, never a security mark",
-       (r.status_code, row.get("what", [None])[0], "Branch: public." in (row.get("what") or []),
+       (r.status_code, row.get("what", [None])[0], len(row.get("what") or []),
         [n.get("url") for n in row.get("notes") or []], bool((row.get("action") or {}).get("post")),
         bool(row.get("later")), row.get("security"), row.get("safe")),
-       (200, "12345678 to 12399999.", True, ["https://steamdb.info/app/4020/history"], True, True, False, False))
+       (200, "12345678 to 12399999 (branch public).", 2, ["https://steamdb.info/app/4020/history"], True, True, False,
+        False))
     said["out"] = "Server details: nothing about builds\n"
     _client323(su.id).post("/api/server/%d/action" % gs.id, json={"action": "details"})
     check("game updates control: another read-only action (details) leaves the row as check-update left it",
@@ -407,6 +408,13 @@ def _s7_page():
         "On by default: why." in (got.get("text") or ""), "Back up first at night" in (got.get("text") or ""),
         got.get("check"), got.get("error")),
        ("Players are kicked.", [{"when": "empty"}], " Don't wait", True, True, True, None))
+    off = _node322(page, ["updates.js"], "for (let i = 0; i < 6; i++) await tick(); return {text: $('upd-list').textContent};", {
+        "/api/updates": {"success": True, "count": 1, "groups": [{"key": "game", "title": "Game servers",
+                                                                  "items": [dict(row, auto=False)]}],
+                         "settings": {}, "history": []}})
+    eq("Updates page (a game row with automatic updates off): no Back up first, which only the nightly window does; its "
+       "reason stays", ("Back up first at night" in (off.get("text") or ""), "On by default: why." in (off.get("text") or ""),
+                        off.get("error")), (False, True, None))
 
 
 def _cleanup323():
