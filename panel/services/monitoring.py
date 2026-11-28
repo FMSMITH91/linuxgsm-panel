@@ -1313,7 +1313,7 @@ def _monitor_server(remote, gs, probe, ports):
     """
     if gs.status in ("installing", "configuring"):
         return False
-    up = game_port_listening(getattr(gs, "game_type", None), gs.port, ports)
+    up = game_port_listening(getattr(gs, "game_type", None), gs.port, ports, gs.short_name)
     # Display-only: does the BOX think a restart is queued for this server?
     # None means "could not look", and that must not be written as "no restart pending"
     # — the badge would simply go out, which is indistinguishable from the cron having

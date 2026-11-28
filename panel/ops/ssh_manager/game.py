@@ -2584,7 +2584,8 @@ def _really_serving(server, game_server):
         return True
     if ports is None:          # the scan failed; that is not an empty set
         return True
-    return portscan.game_port_listening(getattr(game_server, "game_type", None), port, ports)
+    return portscan.game_port_listening(getattr(game_server, "game_type", None), port, ports,
+                                        getattr(game_server, "short_name", None))
 
 
 # ── Which build of the game is actually installed ─────────────────────────────────────────────

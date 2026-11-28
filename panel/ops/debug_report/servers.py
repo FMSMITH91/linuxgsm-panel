@@ -120,7 +120,7 @@ def _port_word(gs, st, now):
     if not (isinstance(hit, tuple) and len(hit) == 2):
         return "port scan: none since panel start"
     ps = mod("panel.ops.ssh_manager.portscan")
-    up = ps.game_port_listening(gs.game_type, gs.port, hit[1] or ())
+    up = ps.game_port_listening(gs.game_type, gs.port, hit[1] or (), gs.short_name)
     return "port %s (scan %s ago)" % ("listening" if up else "NOT listening",
                                      ago(now - (hit[0] - ps._PORT_SCAN_TTL)))
 

@@ -3051,7 +3051,13 @@ def host_live_metrics(server, force=False):
 # The listening ports, each once (no `sort -u`: the parser keeps a set). "PORTS <n>" says the scan
 # answered: a host where `ss` printed nothing is a read that did not happen, the same rule as
 # portscan._remote_listening_ports, so only an answered scan is shared with it.
-_HOST_SS = ("ss -H -ltnu 2>/dev/null | awk '{n = split($5, a, \":\"); if (!s[a[n]]++) print \"PORT\", a[n]} "
+#
+# Each port is printed once per account holding it (PORT <port> <account>; root's, or an owner `ss -e` did not
+# print, with none): portscan.held_by counts a port for a game only when its own account holds it (_OWN_PORT_AWK's
+# rule). Accounts are named from /etc/passwd; one not there is printed as its uid.
+_HOST_SS = ("ss -H -ltnue 2>/dev/null | awk 'BEGIN {while ((getline l < \"/etc/passwd\") > 0) {split(l, p, \":\"); "
+            "u[p[3]] = p[1]}} {n = split($5, a, \":\"); o = \"\"; for (i = 6; i <= NF; i++) if ($i ~ /^uid:/) "
+            "{o = substr($i, 5); if (o in u) o = u[o]} if (!s[a[n] \" \" o]++) print \"PORT\", a[n], o} "
             "END {if (NR) print \"PORTS\", NR}'")
 
 
@@ -3125,6 +3131,7 @@ def _hs_gup(f, _host, acc):
 def _hs_port(f, _host, acc):
     if len(f) >= 2 and f[1].isdecimal():
         acc["ports"].add(int(f[1]))
+        acc["ports"].owners.setdefault(int(f[1]), set()).add(f[2] if len(f) >= 3 else "")
 
 
 def _hs_ports_read(f, _host, acc):
@@ -3154,7 +3161,8 @@ def _parse_host_sample(out):
     host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
             "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
             "cores": 1, "uptime_secs": 0, "net_rx_bytes": None, "net_tx_bytes": None, "net_read_at": None}
-    acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": [],
+    from panel.ops.ssh_manager import portscan as _ps   # at call time: portscan imports this module
+    acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": _ps.Listening(), "cpu": [],
            "ports_read": False}
     _parse_tagged(out, _HOST_SAMPLE_LINES, host, acc)
     return host, acc
@@ -3302,8 +3310,18 @@ def _game_sample_cmd(short_name, game_port, game_type=None):
     if game_port:
         from panel.ops.ssh_manager import portscan as _ps   # at call time: portscan imports this module
         match = " or ".join(f"sport = :{int(p)}" for p in _ps.listen_ports(game_type, game_port))
-        parts.append(f"echo PORT $(ss -H -ltnu '( {match} )' 2>/dev/null | wc -l)")
+        own = f"$(id -u {short_name} 2>/dev/null)" if short_name else ""
+        parts.append(f"ss -H -ltnue '( {match} )' 2>/dev/null | awk -v u=\"{own}\" '{_OWN_PORT_AWK}'")
     return " ; ".join(parts)
+
+
+# server_live_metrics' PORT line: the listening sockets on the game's ports that are ITS account's. `ss -e` prints a
+# socket's owner as uid:<n> (root's, uid 0, not at all). Another account's socket on the same number (another
+# server's query socket on UDP 25565 beside a Minecraft server's TCP 25565) is not this game running: it made a
+# stopped server read as running, and the panel refused to start it. When no socket on those ports names an owner
+# (root's only, or an `ss` without -e), every one counts, as before; so does every one when the account is unknown.
+_OWN_PORT_AWK = ('{ o = ""; for (i = 6; i <= NF; i++) if ($i ~ /^uid:/) o = substr($i, 5); t++; '
+                 'if (o != "") k = 1; if (o == u) m++ } END { print "PORT", (u == "" || !k) ? t + 0 : m + 0 }')
 
 
 def _gs_cpu(f, _m, acc):

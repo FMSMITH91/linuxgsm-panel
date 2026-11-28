@@ -24,16 +24,45 @@ _port_scan_cache = _core.register_remote_cache({})
 _PORT_SCAN_TTL = 5
 
 
+class Listening(set):
+    """A host's listening ports (a set of ints), and the accounts holding each where the scan read them.
+
+    `owners`: {port: {account name, a uid `ss` printed with no name in /etc/passwd, or "" for root's (or an owner
+    not printed)}}. A port with no entry, and every port of a plain set (a stand-in, an older read), counts for
+    every server, as it always did (held_by).
+    """
+
+    def __init__(self, ports=(), owners=None):
+        super().__init__(ports)
+        self.owners = {p: set(o) for p, o in (owners or {}).items()}
+
+    def copy(self):
+        return Listening(self, self.owners)
+
+
+def held_by(ports, port, user):
+    """Whether `port` of the scan `ports` is held by game account `user`, as far as the scan says.
+
+    False only when the sockets on it name their owners and none is `user`: another account's socket on the same
+    number (a Minecraft server's TCP 25565 and another server's UDP 25565 query socket) is not this game running. A
+    port whose owners were not read, a uid with no name, or no `user` to compare (a row without its account) counts.
+    """
+    held = getattr(ports, "owners", {}).get(port) if user else None
+    if not held or held == {""}:
+        return True
+    return user in held or any(o.isdecimal() for o in held)
+
+
 def fresh_ports(rid, now):
     """A copy of the ports a scan of host `rid` read within _PORT_SCAN_TTL seconds, or None."""
     hit = _port_scan_cache.get(rid) if rid is not None else None
-    return set(hit[1]) if hit and hit[0] > now else None
+    return Listening(hit[1], getattr(hit[1], "owners", None)) if hit and hit[0] > now else None
 
 
 def note_ports(rid, now, ports):
     """Keep the ports another read of host `rid` (the host sample's `ss`) took at `now`, as a scan."""
     if rid is not None:
-        _port_scan_cache[rid] = (now + _PORT_SCAN_TTL, set(ports))
+        _port_scan_cache[rid] = (now + _PORT_SCAN_TTL, Listening(ports, getattr(ports, "owners", None)))
 
 def _remote_listening_ports(remote):
     """Set of ports currently listening on `remote`, or NONE when the scan could not be read.
@@ -69,18 +98,35 @@ def _remote_listening_ports(remote):
     # unknown — which resolve_free_port turns into "no ports occupied" and hands a new game server
     # a port that is already listening, when the unprivileged `ss` would have answered.
     # Same idiom as the two siblings running this kind of read: _core.py:1258, firewall.py:395.
-    out, _, _ = _core.run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8,
-                                  sudo=False)
+    #
+    # -e: each socket's owner (uid:<n>), named from /etc/passwd, so a game is read up only on a socket of its own
+    # account (held_by). `ss -e` prints nothing for root's.
+    out, _, _ = _core.run_command(remote, "ss -H -lntue 2>/dev/null | awk " + _SCAN_AWK, timeout=8, sudo=False)
     if not out:
         return None      # nothing came back — a blip, not a host with no listening sockets
-    ports = set()
-    for addr in (out or "").split():
-        if ":" in addr:
-            p = addr.rsplit(":", 1)[1]
-            if p.isdecimal():
-                ports.add(int(p))
+    ports = parse_scan(out)
     if out:   # cache only a scan that returned something (empty output == SSH blip)
         _port_scan_cache[remote.id] = (now + _PORT_SCAN_TTL, ports)
+    return ports
+
+
+# `<address> <owner>` per listening socket (the owner left out for root's): _remote_listening_ports' read.
+_SCAN_AWK = ("'BEGIN {while ((getline l < \"/etc/passwd\") > 0) {split(l, p, \":\"); u[p[3]] = p[1]}} "
+             "{o = \"\"; for (i = 6; i <= NF; i++) if ($i ~ /^uid:/) {o = substr($i, 5); if (o in u) o = u[o]} "
+             "print $5, o}'")
+
+
+def parse_scan(out):
+    """The Listening ports of a scan's `<address> [owner]` lines (an address alone, as an older read printed it)."""
+    ports = Listening()
+    for line in (out or "").splitlines():
+        f = line.split()
+        if not f or ":" not in f[0]:
+            continue
+        p = f[0].rsplit(":", 1)[1]
+        if p.isdecimal():
+            ports.add(int(p))
+            ports.owners.setdefault(int(p), set()).add(f[1] if len(f) > 1 else "")
     return ports
 
 
@@ -92,9 +138,12 @@ def _remote_listening_ports(remote):
 _LISTENS_ALSO_ON = {"vh": (1,)}
 
 
-def game_port_listening(game_type, port, ports):
-    """Whether a game whose port is `port` is listening, by a scan's set of listening `ports`."""
-    return any(p in ports for p in listen_ports(game_type, port))
+def game_port_listening(game_type, port, ports, user=None):
+    """Whether a game whose port is `port` is listening, by a scan's set of listening `ports`.
+
+    `user`: the game's account; a port only another account holds is not counted (held_by).
+    """
+    return any(p in ports and held_by(ports, p, user) for p in listen_ports(game_type, port))
 
 
 def listen_ports(game_type, port):
@@ -124,7 +173,7 @@ def metrics_for_game(sample, short_name, game_port, game_type=None):
         _port = _core.cron_port(game_port)
     except ValueError:
         _port = None
-    m["port_open"] = bool(_port) and game_port_listening(game_type, _port, sample["ports"])
+    m["port_open"] = bool(_port) and game_port_listening(game_type, _port, sample["ports"], short_name)
     return m
 
 

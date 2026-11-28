@@ -270,6 +270,46 @@ def _restore_one324(owner, name):
         setattr(owner, name, _P9_PATCHED.pop((owner, name)))
 
 
+def _s4_own_port(host, su):
+    _p9_quiet_lookups()
+    d = _tf324.mkdtemp(prefix="lgsm-unit-p324-ss-")
+    passwd = os.path.join(d, "passwd")
+    with open(passwd, "w", encoding="ascii") as fh:
+        fh.write("root:x:0:0::/root:/bin/sh\np324mc:x:1101:1101::/home/p324mc:/bin/bash\n"
+                 "p324pmc:x:1102:1102::/home/p324pmc:/bin/bash\n")
+    mc = _gs324(host, "p324-mc", "mc", "p324mc", 25565, status="online")
+    pmc = _gs324(host, "p324-pmc", "pmc", "p324pmc", 25566, status="online")
+    started = []
+    _p9_patch(_sd324, "_bg_power_action", lambda app, gs, remote, action, actor, origin=None, on_done=None:
+              started.append((gs.id, action)))
+    try:
+        out = {}
+        for name, lines in (("other", [_PMC_UDP324, _PMC_TCP324]), ("own", [_PMC_UDP324, _PMC_TCP324, _MC_TCP324])):
+            _p9_patch_sm("run_command", _host324(lines, passwd))
+            _core324._live_metrics_cache.clear()
+            _ps324._port_scan_cache.pop(host.id, None)
+            _db324.session.get(_GS324, mc.id).status = "online"
+            _db324.session.commit()
+            del started[:]
+            r = _client324(su.id).post("/api/server/%d/action" % mc.id, json={"action": "start", "force": True})
+            _ps324._port_scan_cache.pop(host.id, None)
+            listed = _client324(su.id).get("/api/servers").get_json(silent=True)
+            rows = {x["id"]: x["status"] for x in listed if isinstance(x, dict)} if isinstance(listed, list) else {}
+            out[name] = (_p9_json(r).get("success"), list(started), rows.get(mc.id), rows.get(pmc.id))
+    finally:
+        _shutil324.rmtree(d, ignore_errors=True)
+        _core324._live_metrics_cache.clear()
+        _ps324._port_scan_cache.pop(host.id, None)
+        _restore_one324(_sd324, "_bg_power_action")
+        _restore_one324(_core324, "run_command")
+    eq("run state (POST /api/server/<id>/action start, and GET /api/servers): a Minecraft server whose TCP 25565 is "
+       "closed, beside another account's UDP 25565 query socket, is not refused as already running and lists as "
+       "offline; the other server, on its own port, stays online",
+       out["other"], (True, [(mc.id, "start")], "offline", "online"))
+    eq("run state (control: its own account listens on its port): Start is refused as a no-op and it lists as online",
+       out["own"], (False, [], "online", "online"))
+
+
 # ── 5. The window leaves a server stopped: History says so ─────────────────────────────────────────
 _STEAM324 = ("Update available\n* Local build: 12345678\n* Remote build: 12399999\n* Branch: public\n"
              "https://steamdb.info/app/4020/history\n")
@@ -491,6 +531,7 @@ _HOST324 = (
     _s1_until,
     _s2_site,
     _s3_lifted,
+    _s4_own_port,
 )
 _GAME324 = (
 )
